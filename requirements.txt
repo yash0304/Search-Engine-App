@@ -17,4 +17,11 @@ arxiv
 duckduckgo-search
 langchain_experimental
 validators==0.28.1
-youtube_transcript_api
+chroma
+unstructured
+pytube
+youtube-transcript-api==0.6.2
+mysql
+mysql-connector-python
+numexpr
+ddgs==9.5.5
