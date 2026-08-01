@@ -1,0 +1,83 @@
+# Sarvam Voice Assistant (Android)
+
+A trilingual (Gujarati · Hindi · English) push-to-talk voice assistant, built on Sarvam AI's
+REST APIs. Native Kotlin, Jetpack Compose, Material 3.
+
+```
+🎤 Mic ─▶ saaras:v3 (STT) ─▶ sarvam-m (LLM) ─▶ bulbul:v3 (TTS) ─▶ 🔊 Speaker
+```
+
+The assistant detects which language you spoke and replies in that same language, out loud.
+
+## Requirements
+
+- Android Studio (Ladybug or newer) with the Android SDK, **API 35** platform installed
+- JDK 17 (bundled with Android Studio)
+- A device or emulator running **Android 8.0 (API 26)** or newer
+- A Sarvam API key from [dashboard.sarvam.ai](https://dashboard.sarvam.ai)
+
+## Running it
+
+1. Open the `SarvamVoiceAssistant` folder in Android Studio (`File → Open`).
+   Let Gradle sync — it downloads the Android Gradle Plugin and dependencies on first run.
+2. Press **Run** ▶ with a device connected (USB debugging enabled) or an emulator started.
+3. On first launch the app opens **Settings** automatically. Paste your API key and tap **Save**.
+4. Grant the microphone permission when prompted.
+5. Tap the mic, speak, tap again to stop. The reply appears as text and is spoken aloud.
+
+There is no code to edit and no key to hardcode — the key is entered in the app and stored
+in `EncryptedSharedPreferences`, backed by the Android Keystore.
+
+## Building an APK
+
+Locally:
+
+```bash
+cd SarvamVoiceAssistant
+./gradlew assembleDebug
+# → app/build/outputs/apk/debug/app-debug.apk
+```
+
+Or let CI do it: the `Build Android APK` GitHub Actions workflow builds on every push and
+uploads `sarvam-voice-debug-apk` as a downloadable artifact. Open the workflow run, download
+the artifact, unzip, and sideload the APK (enable "Install unknown apps" on your phone).
+
+## Using it
+
+| Control | What it does |
+|---|---|
+| Mic button | Tap to record, tap again to stop and send. Auto-stops at 25 s. |
+| Language chips | `Auto` lets the model detect the language. Pick one to force it. |
+| Text field | Type instead of speaking; the reply is still spoken aloud. |
+| Settings | API key and voice selection. |
+| Trash icon | Clears the conversation and the model's memory of it. |
+
+## How it is put together
+
+| File | Responsibility |
+|---|---|
+| `SarvamClient.kt` | The three REST calls, error mapping, bounded conversation history |
+| `AudioRecorder.kt` | 16 kHz mono WAV capture, off the main thread, with a live level meter |
+| `AudioPlayer.kt` | Plays the reply and suspends until playback genuinely finishes |
+| `ApiKeyStore.kt` | Encrypted key storage, with a plain-preferences fallback |
+| `ChatViewModel.kt` | Owns the STT → LLM → TTS pipeline and all UI state |
+| `ui/ChatScreen.kt` | Compose chat UI, mic button, input bar |
+| `ui/SettingsDialog.kt` | API key entry and voice picker |
+| `Voices.kt` | The valid `bulbul:v3` speaker list and per-language defaults |
+
+## Customising
+
+- **Voice** — pick any of the 39 `bulbul:v3` voices in Settings. Voices are not
+  language-locked; any voice can speak any supported language. Names are case-sensitive and
+  lowercase, and a name outside `Voices.ALL` is rejected by the API with an HTTP 400.
+- **Personality** — edit `SYSTEM_PROMPT` in `SarvamClient.kt`.
+- **Recording limit** — `MAX_RECORD_MS` in `ChatViewModel.kt`. The speech-to-text endpoint
+  accepts at most 30 seconds of audio per request, so keep it under that.
+- **Conversation memory** — `HISTORY_TURNS` in `SarvamClient.kt`.
+
+## Limitations
+
+- Push-to-talk only. Interrupting the assistant mid-sentence (barge-in) needs Sarvam's
+  streaming WebSocket APIs, which this app does not use.
+- One request per turn, so there is a pause between speaking and hearing the reply.
+- The debug APK is signed with the debug keystore — fine for sideloading, not for Play.
