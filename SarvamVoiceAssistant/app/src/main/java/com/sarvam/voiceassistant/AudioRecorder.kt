@@ -72,8 +72,9 @@ class AudioRecorder(private val outputDir: File) {
             AudioFormat.ENCODING_PCM_16BIT,
             bufferSize,
         )
-        check(recorder.state == AudioRecord.STATE_INITIALIZED) {
-            "Could not open the microphone. Another app may be using it."
+        if (recorder.state != AudioRecord.STATE_INITIALIZED) {
+            recorder.release() // Otherwise the failed instance holds the mic handle open.
+            error("Could not open the microphone. Another app may be using it.")
         }
 
         val wavFile = File(outputDir, "recording.wav")
