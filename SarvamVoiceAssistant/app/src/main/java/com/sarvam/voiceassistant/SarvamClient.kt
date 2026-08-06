@@ -84,14 +84,9 @@ class SarvamClient(private val apiKey: String) {
     suspend fun listChatModels(): List<String> = withContext(Dispatchers.IO) {
         cachedModels?.let { return@withContext it }
 
-        val request = Request.Builder()
-            .url("$BASE_URL/v1/models")
-            .addHeader("api-subscription-key", apiKey)
-            .addHeader("Authorization", "Bearer $apiKey")
-            .get()
-            .build()
-
-        val result = send(request)
+        val result = sendAuthenticated { builder ->
+            builder.url("$BASE_URL/v1/models").get().build()
+        }
         if (!result.success) throw SarvamException(errorMessage("Model list", result.code, result.body))
 
         val data = runCatching { JSONObject(result.body).optJSONArray("data") }.getOrNull()
@@ -237,14 +232,11 @@ class SarvamClient(private val apiKey: String) {
             // JSONObject.NULL is required: put(key, null) would drop the field entirely.
             .put("reasoning_effort", JSONObject.NULL)
 
-        val request = Request.Builder()
-            .url("$BASE_URL/v1/chat/completions")
-            .addHeader("api-subscription-key", apiKey)
-            .addHeader("Authorization", "Bearer $apiKey")
-            .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
-            .build()
-
-        return send(request)
+        return sendAuthenticated { builder ->
+            builder.url("$BASE_URL/v1/chat/completions")
+                .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+        }
     }
 
     /** Does this failure look like "that model is gone" rather than a real error? */
@@ -299,6 +291,26 @@ class SarvamClient(private val apiKey: String) {
 
     private data class HttpResult(val code: Int, val body: String, val success: Boolean)
 
+    private fun authenticatedBuilder(bearer: Boolean): Request.Builder {
+        val builder = Request.Builder().addHeader("api-subscription-key", apiKey)
+        if (bearer) builder.addHeader("Authorization", "Bearer $apiKey")
+        return builder
+    }
+
+    /**
+     * Calls an OpenAI-compatible endpoint, retrying without the `Authorization` header if the
+     * first attempt is rejected.
+     *
+     * Sending both `api-subscription-key` and `Authorization: Bearer` is a guess about which
+     * one a deployment wants, and a server that validates `Authorization` strictly answers 401
+     * even though the subscription key alone would have worked. Rather than guess, try both.
+     */
+    private fun sendAuthenticated(build: (Request.Builder) -> Request): HttpResult {
+        val withBearer = send(build(authenticatedBuilder(bearer = true)))
+        if (withBearer.success || withBearer.code !in listOf(401, 403)) return withBearer
+        return send(build(authenticatedBuilder(bearer = false)))
+    }
+
     private fun send(request: Request): HttpResult = try {
         client.newCall(request).execute().use { response ->
             HttpResult(response.code, response.body?.string().orEmpty(), response.isSuccessful)
@@ -326,7 +338,10 @@ class SarvamClient(private val apiKey: String) {
         }.getOrNull().orEmpty()
 
         val hint = when (code) {
-            401, 403 -> "Your API key was rejected. Check it in Settings."
+            // Include the API's own wording — it distinguishes a bad key from a plan or
+            // permission problem, which the generic message used to hide.
+            401, 403 -> "Your API key was rejected${detail.ifBlank { "" }.let { if (it.isBlank()) "" else " ($it)" }}. " +
+                "Check it in Settings — copy it fresh from dashboard.sarvam.ai with no spaces."
             402 -> "Your Sarvam account is out of credits."
             429 -> "Rate limited by Sarvam. Wait a moment and try again."
             in 500..599 -> "Sarvam's servers returned an error. Try again shortly."
