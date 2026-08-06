@@ -84,6 +84,9 @@ class SarvamClient(private val apiKey: String) {
         private const val TTS_CHAR_LIMIT = 1500
         private const val HISTORY_TURNS = 8
 
+        /** Headroom in case a deployment ignores `reasoning_effort` and thinks anyway. */
+        private const val MAX_TOKENS = 800
+
         private val SYSTEM_PROMPT = """
             You are a helpful, friendly voice assistant.
             You understand Gujarati, Hindi, and English, including code-mixed speech.
@@ -224,19 +227,29 @@ class SarvamClient(private val apiKey: String) {
         val json = runCatching { JSONObject(result.body) }.getOrNull()
             ?: throw SarvamException("Assistant reply returned an unexpected response.")
 
-        val message = json.optJSONArray("choices")
-            ?.optJSONObject(0)
-            ?.optJSONObject("message")
+        val choice = json.optJSONArray("choices")?.optJSONObject(0)
+            ?: throw SarvamException("Assistant reply contained no choices.")
+        val message = choice.optJSONObject("message")
             ?: throw SarvamException("Assistant reply contained no message.")
 
-        // Reasoning models leave `content` JSON-null and put the prose in `reasoning_content`,
-        // so fall through to it. stringOrNull is essential here: Android's optString renders a
-        // JSON null as the literal string "null", which otherwise gets spoken aloud verbatim.
-        val reply = (message.stringOrNull("content") ?: message.stringOrNull("reasoning_content"))
-            ?.let(::stripThinking)
-            .orEmpty()
+        // Only `content` is ever the answer. `reasoning_content` is the model's private
+        // chain-of-thought — never read it here, or the assistant reads its own thinking
+        // aloud. stringOrNull matters too: Android's optString turns a JSON null into the
+        // literal string "null".
+        val reply = message.stringOrNull("content")?.let(::stripThinking).orEmpty()
 
-        if (reply.isEmpty()) throw SarvamException("The model returned an empty reply.")
+        if (reply.isEmpty()) {
+            val thoughtInstead = message.stringOrNull("reasoning_content") != null
+            val ranOutOfTokens = choice.stringOrNull("finish_reason") == "length"
+            throw SarvamException(
+                if (thoughtInstead || ranOutOfTokens) {
+                    "The model used its whole budget thinking and never answered. " +
+                        "Try again, or pick a different model in Settings."
+                } else {
+                    "The model returned an empty reply."
+                },
+            )
+        }
 
         history.add(pending)
         history.add(JSONObject().put("role", "assistant").put("content", reply))
@@ -248,7 +261,13 @@ class SarvamClient(private val apiKey: String) {
             .put("model", model)
             .put("messages", messages)
             .put("temperature", 0.7)
-            .put("max_tokens", 300)
+            .put("max_tokens", MAX_TOKENS)
+            // Thinking is on by default on sarvam-30b/105b and its tokens are billed as
+            // completion tokens. A spoken two-sentence reply needs no chain-of-thought, and
+            // with a small budget the reasoning consumes everything — leaving content null,
+            // finish_reason "length", and only reasoning_content populated.
+            // JSONObject.NULL is required: put(key, null) would drop the field entirely.
+            .put("reasoning_effort", JSONObject.NULL)
 
         val request = Request.Builder()
             .url("$BASE_URL/v1/chat/completions")
