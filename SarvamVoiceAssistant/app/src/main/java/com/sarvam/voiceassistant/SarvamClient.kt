@@ -49,9 +49,15 @@ class SarvamClient(private val apiKey: String) {
 
     private val history = mutableListOf<JSONObject>()
 
+    private val webSearch = WebSearch()
+
     /** Explicit user choice from Settings. Blank or null means auto-resolve. */
     @Volatile
     var preferredChatModel: String? = null
+
+    /** When off, no tool is offered and the model answers from training alone. */
+    @Volatile
+    var webSearchEnabled: Boolean = true
 
     @Volatile
     private var resolvedChatModel: String? = null
@@ -69,6 +75,11 @@ class SarvamClient(private val apiKey: String) {
 
         /** Headroom in case a deployment ignores `reasoning_effort` and thinks anyway. */
         private const val MAX_TOKENS = 800
+
+        const val TOOL_NAME = "web_search"
+
+        /** How many times the model may search before it has to answer. */
+        private const val MAX_TOOL_ROUNDS = 2
     }
 
     // ── Model discovery ──────────────────────────────────────────────────
@@ -152,7 +163,14 @@ class SarvamClient(private val apiKey: String) {
 
     // ── 2. Chat completion ───────────────────────────────────────────────
 
-    suspend fun chat(userText: String): String = withContext(Dispatchers.IO) {
+    /**
+     * @param onSearching invoked with the query when the model decides to look something up,
+     *   so the UI can say so rather than appearing to stall.
+     */
+    suspend fun chat(
+        userText: String,
+        onSearching: (String) -> Unit = {},
+    ): String = withContext(Dispatchers.IO) {
         // Build the turn without mutating history, so a failed call leaves no residue.
         val pending = JSONObject().put("role", "user").put("content", userText)
         val messages = JSONArray().apply {
@@ -162,6 +180,102 @@ class SarvamClient(private val apiKey: String) {
             put(pending)
         }
 
+        // The model may ask to search, read the results, then answer — hence a loop rather
+        // than a single call. Bounded so a model that keeps searching cannot spin forever.
+        repeat(MAX_TOOL_ROUNDS + 1) { round ->
+            val completion = requestCompletion(messages)
+            val message = completion.message
+            val toolCalls = message.optJSONArray("tool_calls")
+
+            val wantsSearch = webSearchEnabled &&
+                toolCalls != null &&
+                toolCalls.length() > 0 &&
+                round < MAX_TOOL_ROUNDS
+
+            if (!wantsSearch) {
+                val reply = extractReply(completion)
+                history.add(pending)
+                history.add(JSONObject().put("role", "assistant").put("content", reply))
+                return@withContext reply
+            }
+
+            // Echo the assistant's tool-call turn back verbatim; the API requires it to
+            // precede the tool results it is matching against.
+            messages.put(message)
+            for (i in 0 until toolCalls.length()) {
+                messages.put(runToolCall(toolCalls.optJSONObject(i), onSearching))
+            }
+        }
+
+        throw SarvamException("The assistant kept searching without answering. Try rephrasing.")
+    }
+
+    /** Runs one tool call and returns the `tool` role message carrying its output. */
+    private suspend fun runToolCall(call: JSONObject?, onSearching: (String) -> Unit): JSONObject {
+        val id = call?.stringOrNull("id").orEmpty()
+        val function = call?.optJSONObject("function")
+        val name = function?.stringOrNull("name").orEmpty()
+
+        // Arguments arrive as a JSON string, not an object.
+        val query = runCatching {
+            JSONObject(function?.stringOrNull("arguments").orEmpty()).stringOrNull("query")
+        }.getOrNull().orEmpty()
+
+        val output = when {
+            name != TOOL_NAME -> "Unknown tool: $name"
+            query.isBlank() -> "No search query was provided."
+            else -> {
+                onSearching(query)
+                // A failed lookup must not fail the turn — the model can still answer.
+                runCatching { webSearch.search(query) }
+                    .getOrElse { "The search could not be completed: ${it.message}" }
+            }
+        }
+
+        return JSONObject()
+            .put("role", "tool")
+            .put("tool_call_id", id)
+            .put("name", name.ifBlank { TOOL_NAME })
+            .put("content", output)
+    }
+
+    /**
+     * OpenAI-style tool declaration. The description is what the model reasons over when
+     * deciding whether to search, so it spells out when *not* to — an unnecessary lookup
+     * adds a full round trip, which is felt in a spoken conversation.
+     */
+    private fun searchToolSchema(): JSONArray {
+        val parameters = JSONObject()
+            .put("type", "object")
+            .put(
+                "properties",
+                JSONObject().put(
+                    "query",
+                    JSONObject()
+                        .put("type", "string")
+                        .put("description", "Search keywords, in English, for the fact to look up."),
+                ),
+            )
+            .put("required", JSONArray().put("query"))
+
+        val function = JSONObject()
+            .put("name", TOOL_NAME)
+            .put(
+                "description",
+                "Look up current information on the web. Use this for anything that happened " +
+                    "recently, for facts that change over time, or when you are unsure whether " +
+                    "your knowledge is current. Do NOT use it for greetings, chit-chat, " +
+                    "opinions, translation, or arithmetic.",
+            )
+            .put("parameters", parameters)
+
+        return JSONArray().put(JSONObject().put("type", "function").put("function", function))
+    }
+
+    private data class Completion(val message: JSONObject, val finishReason: String)
+
+    /** One round trip to the chat endpoint, including recovery from a retired model. */
+    private suspend fun requestCompletion(messages: JSONArray): Completion {
         var model = resolveChatModel()
         var result = sendChat(model, messages)
 
@@ -186,31 +300,34 @@ class SarvamClient(private val apiKey: String) {
 
         val choice = json.optJSONArray("choices")?.optJSONObject(0)
             ?: throw SarvamException("Assistant reply contained no choices.")
+
         val message = choice.optJSONObject("message")
             ?: throw SarvamException("Assistant reply contained no message.")
 
+        // Never mutate `message`: it gets echoed back to the API verbatim on a tool round,
+        // and an unrecognised field there risks a 400.
+        return Completion(message, choice.stringOrNull("finish_reason").orEmpty())
+    }
+
+    private fun extractReply(completion: Completion): String {
+        val message = completion.message
         // Only `content` is ever the answer. `reasoning_content` is the model's private
         // chain-of-thought — never read it here, or the assistant reads its own thinking
         // aloud. stringOrNull matters too: Android's optString turns a JSON null into the
         // literal string "null".
         val reply = message.stringOrNull("content")?.let(ChatModels::stripThinking).orEmpty()
+        if (reply.isNotEmpty()) return reply
 
-        if (reply.isEmpty()) {
-            val thoughtInstead = message.stringOrNull("reasoning_content") != null
-            val ranOutOfTokens = choice.stringOrNull("finish_reason") == "length"
-            throw SarvamException(
-                if (thoughtInstead || ranOutOfTokens) {
-                    "The model used its whole budget thinking and never answered. " +
-                        "Try again, or pick a different model in Settings."
-                } else {
-                    "The model returned an empty reply."
-                },
-            )
-        }
-
-        history.add(pending)
-        history.add(JSONObject().put("role", "assistant").put("content", reply))
-        reply
+        val thoughtInstead = message.stringOrNull("reasoning_content") != null
+        val ranOutOfTokens = completion.finishReason == "length"
+        throw SarvamException(
+            if (thoughtInstead || ranOutOfTokens) {
+                "The model used its whole budget thinking and never answered. " +
+                    "Try again, or pick a different model in Settings."
+            } else {
+                "The model returned an empty reply."
+            },
+        )
     }
 
     private fun sendChat(model: String, messages: JSONArray): HttpResult {
@@ -225,6 +342,7 @@ class SarvamClient(private val apiKey: String) {
             // finish_reason "length", and only reasoning_content populated.
             // JSONObject.NULL is required: put(key, null) would drop the field entirely.
             .put("reasoning_effort", JSONObject.NULL)
+            .apply { if (webSearchEnabled) put("tools", searchToolSchema()) }
 
         return sendAuthenticated { builder ->
             builder.url("$BASE_URL/v1/chat/completions")

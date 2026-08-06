@@ -26,7 +26,7 @@ data class Message(
 )
 
 /** What the pipeline is currently doing — drives the status line and the mic button. */
-enum class Stage { IDLE, RECORDING, TRANSCRIBING, THINKING, SPEAKING }
+enum class Stage { IDLE, RECORDING, TRANSCRIBING, THINKING, SEARCHING, SPEAKING }
 
 data class UiState(
     val messages: List<Message> = emptyList(),
@@ -41,6 +41,9 @@ data class UiState(
     val availableModels: List<String> = emptyList(),
     val loadingModels: Boolean = false,
     val lockEnabled: Boolean = true,
+    val webSearchEnabled: Boolean = true,
+    /** The query the model is currently looking up, for the status line. */
+    val searchQuery: String? = null,
 ) {
     val isBusy: Boolean get() = stage != Stage.IDLE
 }
@@ -61,6 +64,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             inputLanguage = store.inputLanguage,
             chatModel = store.chatModel,
             lockEnabled = store.lockEnabled,
+            webSearchEnabled = store.webSearchEnabled,
         ),
     )
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
@@ -77,6 +81,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun newClient(key: String) = SarvamClient(key).apply {
         preferredChatModel = store.chatModel.ifBlank { null }
+        webSearchEnabled = store.webSearchEnabled
     }
 
     companion object {
@@ -114,6 +119,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun maskedKey(): String = store.maskedKey()
 
     fun isLockEnabled(): Boolean = store.lockEnabled
+
+    fun setWebSearchEnabled(enabled: Boolean) {
+        store.webSearchEnabled = enabled
+        client?.webSearchEnabled = enabled
+        _uiState.update { it.copy(webSearchEnabled = enabled) }
+    }
 
     fun setLockEnabled(enabled: Boolean) {
         store.lockEnabled = enabled
@@ -232,7 +243,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     /** Shared tail of both paths: ask the model, then speak the reply. */
     private suspend fun respondTo(api: SarvamClient, prompt: String, languageCode: String) {
         setStage(Stage.THINKING)
-        val reply = api.chat(prompt)
+        val reply = api.chat(prompt) { query ->
+            _uiState.update { it.copy(stage = Stage.SEARCHING, searchQuery = query) }
+        }
+        _uiState.update { it.copy(searchQuery = null) }
         addMessage(Message(Role.ASSISTANT, reply, languageCode))
 
         setStage(Stage.SPEAKING)

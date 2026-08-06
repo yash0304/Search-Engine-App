@@ -79,6 +79,27 @@ the artifact, unzip, and sideload the APK (enable "Install unknown apps" on your
   accepts at most 30 seconds of audio per request, so keep it under that.
 - **Conversation memory** — `HISTORY_TURNS` in `SarvamClient.kt`.
 
+## Looking things up
+
+A language model only knows what it was trained on, so out of the box it cannot tell you
+what happened last week — and will happily invent an answer. Two things address that:
+
+- **The date is injected** into the system prompt on every turn, so it always knows what
+  today is rather than guessing from training data.
+- **Web search is offered as a tool.** The model calls it only when it decides it needs
+  current information, using DuckDuckGo's Instant Answer API and Wikipedia — both keyless,
+  so nothing extra needs configuring. The status line shows what it is searching for.
+
+Turn it off in **Settings → Look things up** if you would rather have faster answers from
+the model's own knowledge.
+
+What this does *not* give you is a news feed. Wikipedia and DuckDuckGo are strong on
+established facts and reasonably current on notable events, but they will not have this
+morning's headlines, live scores or market prices. For those you would need a dedicated
+provider per category, each with its own API key.
+
+Search failures never break a turn — the model is told the lookup failed and answers anyway.
+
 ## Model selection
 
 Sarvam retires chat models fairly often, and every retirement breaks clients that pin a

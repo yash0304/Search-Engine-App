@@ -123,11 +123,13 @@ fun ChatScreen(viewModel: ChatViewModel) {
             loadingModels = state.loadingModels,
             lockEnabled = state.lockEnabled,
             lockAvailable = lockAvailable,
-            onSave = { key, speaker, model, lock ->
+            webSearchEnabled = state.webSearchEnabled,
+            onSave = { key, speaker, model, lock, webSearch ->
                 viewModel.saveApiKey(key) // Blank keeps the stored key.
                 viewModel.setSpeaker(speaker)
                 viewModel.setChatModel(model)
                 viewModel.setLockEnabled(lock)
+                viewModel.setWebSearchEnabled(webSearch)
                 showSettings = false
             },
             onClearKey = {
@@ -162,6 +164,7 @@ fun ChatScreen(viewModel: ChatViewModel) {
                 selectedLanguage = state.inputLanguage,
                 onLanguageChange = viewModel::setInputLanguage,
                 stage = state.stage,
+                searchQuery = state.searchQuery,
                 amplitude = amplitude,
                 enabled = state.hasApiKey,
                 onSend = {
@@ -296,6 +299,7 @@ private fun InputBar(
     selectedLanguage: String,
     onLanguageChange: (String) -> Unit,
     stage: Stage,
+    searchQuery: String?,
     amplitude: Float,
     enabled: Boolean,
     onSend: () -> Unit,
@@ -304,7 +308,7 @@ private fun InputBar(
     Surface(tonalElevation = 3.dp) {
         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
 
-            StatusLine(stage)
+            StatusLine(stage, searchQuery)
 
             Row(
                 modifier = Modifier
@@ -351,12 +355,13 @@ private fun InputBar(
 }
 
 @Composable
-private fun StatusLine(stage: Stage) {
+private fun StatusLine(stage: Stage, searchQuery: String?) {
     val label = when (stage) {
         Stage.IDLE -> null
         Stage.RECORDING -> "Listening…"
         Stage.TRANSCRIBING -> "Transcribing…"
         Stage.THINKING -> "Thinking…"
+        Stage.SEARCHING -> searchQuery?.let { "Searching for \"$it\"…" } ?: "Searching…"
         Stage.SPEAKING -> "Speaking…"
     }
 

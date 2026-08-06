@@ -54,7 +54,8 @@ fun SettingsDialog(
     loadingModels: Boolean,
     lockEnabled: Boolean,
     lockAvailable: Boolean,
-    onSave: (apiKey: String, speaker: String, model: String, lock: Boolean) -> Unit,
+    webSearchEnabled: Boolean,
+    onSave: (apiKey: String, speaker: String, model: String, lock: Boolean, webSearch: Boolean) -> Unit,
     onClearKey: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -62,6 +63,7 @@ fun SettingsDialog(
     var speaker by remember { mutableStateOf(initialSpeaker) }
     var model by remember { mutableStateOf(initialModel) }
     var lock by remember { mutableStateOf(lockEnabled) }
+    var webSearch by remember { mutableStateOf(webSearchEnabled) }
     var keyVisible by remember { mutableStateOf(false) }
 
     AlertDialog(
@@ -130,6 +132,16 @@ fun SettingsDialog(
                     onCheckedChange = { lock = it },
                 )
 
+                Spacer(Modifier.height(16.dp))
+                ToggleRow(
+                    title = "Look things up",
+                    hint = "Let the assistant search the web when asked about recent events. " +
+                        "Adds a pause while it searches.",
+                    checked = webSearch,
+                    enabled = true,
+                    onCheckedChange = { webSearch = it },
+                )
+
                 Spacer(Modifier.height(20.dp))
                 SettingSection(
                     title = "Chat model",
@@ -160,7 +172,7 @@ fun SettingsDialog(
         },
         confirmButton = {
             TextButton(
-                onClick = { onSave(apiKey.trim(), speaker, model, lock) },
+                onClick = { onSave(apiKey.trim(), speaker, model, lock, webSearch) },
                 // With no key saved yet, one must be entered before anything can work.
                 enabled = hasSavedKey || apiKey.isNotBlank(),
             ) {
