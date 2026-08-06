@@ -19,17 +19,22 @@ import java.util.concurrent.TimeUnit
 class SarvamException(message: String, cause: Throwable? = null) : Exception(message, cause)
 
 /**
- * Thin client over the three Sarvam AI REST endpoints this app uses.
+ * Thin client over the Sarvam AI REST endpoints this app uses.
  *
- *  STT  POST /speech-to-text       multipart, model `saaras:v3`
- *  LLM  POST /v1/chat/completions  JSON, model `sarvam-30b`
- *  TTS  POST /text-to-speech       JSON, model `bulbul:v3`
+ *  STT     POST /speech-to-text       multipart, model `saaras:v3`
+ *  LLM     POST /v1/chat/completions  JSON, model discovered at runtime
+ *  TTS     POST /text-to-speech       JSON, model `bulbul:v3`
+ *  Models  GET  /v1/models            OpenAI-compatible model listing
  *
- * Every call authenticates with the `api-subscription-key` header. The chat endpoint is
- * OpenAI-compatible and also accepts `Authorization: Bearer`, so both are sent there.
+ * Every call authenticates with the `api-subscription-key` header. The OpenAI-compatible
+ * endpoints also accept `Authorization: Bearer`, so both are sent there.
  *
- * All public functions are `suspend` and move to [Dispatchers.IO] themselves, so they are
- * safe to call directly from a ViewModel coroutine.
+ * The chat model is *not* hardcoded. Sarvam has retired chat models more than once
+ * (`sarvam-m`, then `sarvam-30b`), and each retirement broke every pinned client. Instead
+ * this asks `/v1/models` what the account can actually use, and if a request is still
+ * rejected for the model it retries once with the replacement named in the error.
+ *
+ * All public functions are `suspend` and move to [Dispatchers.IO] themselves.
  */
 class SarvamClient(private val apiKey: String) {
 
@@ -43,23 +48,40 @@ class SarvamClient(private val apiKey: String) {
 
     private val history = mutableListOf<JSONObject>()
 
+    /** Explicit user choice from Settings. Blank or null means auto-resolve. */
+    @Volatile
+    var preferredChatModel: String? = null
+
+    @Volatile
+    private var resolvedChatModel: String? = null
+
+    @Volatile
+    private var cachedModels: List<String>? = null
+
     companion object {
         private const val BASE_URL = "https://api.sarvam.ai"
         private const val STT_MODEL = "saaras:v3"
-
-        /**
-         * `sarvam-m` (24B) is deprecated on the chat endpoint. `sarvam-30b` is the right
-         * default here: replies are 2-3 spoken sentences, so the extra quality of
-         * `sarvam-105b` buys little while its latency is felt on every single turn.
-         * Swap to "sarvam-105b" if you want stronger reasoning and can accept the wait.
-         */
-        private const val CHAT_MODEL = "sarvam-30b"
         private const val TTS_MODEL = "bulbul:v3"
 
-        /** Sarvam caps a single text-to-speech request; keep well under it. */
-        private const val TTS_CHAR_LIMIT = 1500
+        /** Used only when `/v1/models` cannot be reached at all. */
+        const val FALLBACK_CHAT_MODEL = "sarvam-105b"
 
-        /** How many past turns to replay to the model (excluding the system prompt). */
+        /**
+         * Auto-selection order among whatever the account actually exposes. Anything not
+         * listed here still gets used if it is the only chat model available, so a future
+         * model works without a code change.
+         */
+        private val CHAT_MODEL_PREFERENCE = listOf("sarvam-105b", "sarvam-30b")
+
+        /** Substrings that mark a model id as speech/translation rather than chat. */
+        private val NON_CHAT_HINTS = listOf(
+            "saaras", "bulbul", "mayura", "translate", "vision",
+            "tts", "stt", "embed", "ocr", "parse", "rerank",
+        )
+
+        private val MODEL_ID_PATTERN = Regex("""sarvam[a-zA-Z0-9_.\-]*""")
+
+        private const val TTS_CHAR_LIMIT = 1500
         private const val HISTORY_TURNS = 8
 
         private val SYSTEM_PROMPT = """
@@ -71,11 +93,74 @@ class SarvamClient(private val apiKey: String) {
         """.trimIndent()
     }
 
+    // ── Model discovery ──────────────────────────────────────────────────
+
+    /** Chat models this API key can actually use, newest-preferred first. Cached per client. */
+    suspend fun listChatModels(): List<String> = withContext(Dispatchers.IO) {
+        cachedModels?.let { return@withContext it }
+
+        val request = Request.Builder()
+            .url("$BASE_URL/v1/models")
+            .addHeader("api-subscription-key", apiKey)
+            .addHeader("Authorization", "Bearer $apiKey")
+            .get()
+            .build()
+
+        val result = send(request)
+        if (!result.success) throw SarvamException(errorMessage("Model list", result.code, result.body))
+
+        val data = runCatching { JSONObject(result.body).optJSONArray("data") }.getOrNull()
+            ?: throw SarvamException("Model list returned an unexpected response.")
+
+        val ids = buildList {
+            for (i in 0 until data.length()) {
+                val id = data.optJSONObject(i)?.optString("id").orEmpty()
+                if (id.isNotBlank()) add(id)
+            }
+        }
+
+        val chatModels = ids.filter(::looksLikeChatModel)
+            .sortedBy { id ->
+                // Keep the preferred ones on top; everything else follows in API order.
+                CHAT_MODEL_PREFERENCE.indexOf(id).takeIf { it >= 0 } ?: CHAT_MODEL_PREFERENCE.size
+            }
+
+        cachedModels = chatModels
+        chatModels
+    }
+
+    private fun looksLikeChatModel(id: String): Boolean {
+        val lower = id.lowercase()
+        // Speech models use a colon-versioned form such as `saaras:v3`.
+        if (lower.contains(':')) return false
+        return NON_CHAT_HINTS.none { lower.contains(it) }
+    }
+
+    /** Forget the discovered list so the next call re-queries the API. */
+    fun invalidateModelCache() {
+        cachedModels = null
+        resolvedChatModel = null
+    }
+
+    /** The model currently in use, or null before the first chat request resolves one. */
+    fun activeChatModel(): String? = preferredChatModel?.takeIf { it.isNotBlank() } ?: resolvedChatModel
+
+    private suspend fun resolveChatModel(): String {
+        preferredChatModel?.takeIf { it.isNotBlank() }?.let { return it }
+        resolvedChatModel?.let { return it }
+
+        // A failure here must not block chatting — fall back and let the retry path correct us.
+        val available = runCatching { listChatModels() }.getOrDefault(emptyList())
+        val picked = CHAT_MODEL_PREFERENCE.firstOrNull { it in available }
+            ?: available.firstOrNull()
+            ?: FALLBACK_CHAT_MODEL
+
+        resolvedChatModel = picked
+        return picked
+    }
+
     // ── 1. Speech to text ────────────────────────────────────────────────
 
-    /**
-     * @param languageCode a BCP-47 code such as `gu-IN`, or `unknown` to let the model detect it.
-     */
     suspend fun transcribe(audioFile: File, languageCode: String = "unknown"): Transcription =
         withContext(Dispatchers.IO) {
             if (!audioFile.exists() || audioFile.length() <= WAV_HEADER_BYTES) {
@@ -101,7 +186,6 @@ class SarvamClient(private val apiKey: String) {
             if (transcript.isEmpty()) {
                 throw SarvamException("Nothing was recognised in that recording. Try speaking a little louder.")
             }
-            // The field name has varied across API versions; fall back rather than crash.
             val detected = json.optString("language_code")
                 .ifBlank { json.optString("language") }
                 .ifBlank { "unknown" }
@@ -112,15 +196,53 @@ class SarvamClient(private val apiKey: String) {
     // ── 2. Chat completion ───────────────────────────────────────────────
 
     suspend fun chat(userText: String): String = withContext(Dispatchers.IO) {
-        history.add(JSONObject().put("role", "user").put("content", userText))
-
+        // Build the turn without mutating history, so a failed call leaves no residue.
+        val pending = JSONObject().put("role", "user").put("content", userText)
         val messages = JSONArray().apply {
             put(JSONObject().put("role", "system").put("content", SYSTEM_PROMPT))
             history.takeLast(HISTORY_TURNS).forEach { put(it) }
+            put(pending)
         }
 
+        var model = resolveChatModel()
+        var result = sendChat(model, messages)
+
+        if (!result.success && isModelRejected(result)) {
+            // The model went away underneath us. Take the replacement the error names,
+            // otherwise re-ask /v1/models, then try exactly once more.
+            val suggested = suggestedModelFrom(result.body, model)
+            invalidateModelCache()
+            val retryModel = suggested ?: resolveChatModel().takeIf { it != model }
+
+            if (retryModel != null) {
+                model = retryModel
+                resolvedChatModel = retryModel
+                result = sendChat(model, messages)
+            }
+        }
+
+        if (!result.success) throw SarvamException(errorMessage("Assistant reply", result.code, result.body))
+
+        val json = runCatching { JSONObject(result.body) }.getOrNull()
+            ?: throw SarvamException("Assistant reply returned an unexpected response.")
+
+        val reply = json.optJSONArray("choices")
+            ?.optJSONObject(0)
+            ?.optJSONObject("message")
+            ?.optString("content")
+            ?.trim()
+            .orEmpty()
+
+        if (reply.isEmpty()) throw SarvamException("The model returned an empty reply.")
+
+        history.add(pending)
+        history.add(JSONObject().put("role", "assistant").put("content", reply))
+        reply
+    }
+
+    private fun sendChat(model: String, messages: JSONArray): HttpResult {
         val payload = JSONObject()
-            .put("model", CHAT_MODEL)
+            .put("model", model)
             .put("messages", messages)
             .put("temperature", 0.7)
             .put("max_tokens", 300)
@@ -132,23 +254,27 @@ class SarvamClient(private val apiKey: String) {
             .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
             .build()
 
-        val json = execute(request, "Assistant reply")
-        val reply = json.optJSONArray("choices")
-            ?.optJSONObject(0)
-            ?.optJSONObject("message")
-            ?.optString("content")
-            ?.trim()
-            .orEmpty()
-
-        if (reply.isEmpty()) throw SarvamException("The model returned an empty reply.")
-
-        history.add(JSONObject().put("role", "assistant").put("content", reply))
-        reply
+        return send(request)
     }
+
+    /** Does this failure look like "that model is gone" rather than a real error? */
+    private fun isModelRejected(result: HttpResult): Boolean {
+        if (result.code !in listOf(400, 403, 404, 422)) return false
+        val body = result.body.lowercase()
+        if (!body.contains("model")) return false
+        return listOf("deprecat", "not found", "unsupported", "invalid", "unavailable", "retired")
+            .any { body.contains(it) }
+    }
+
+    /** Pull a replacement model id out of an error message, ignoring the one we just tried. */
+    private fun suggestedModelFrom(body: String, tried: String): String? =
+        MODEL_ID_PATTERN.findAll(body)
+            .map { it.value.trimEnd('.', ',', ';', ':', '-', '_', ')', '"', '\'') }
+            .filter { it.isNotBlank() && it != tried && looksLikeChatModel(it) }
+            .firstOrNull()
 
     // ── 3. Text to speech ────────────────────────────────────────────────
 
-    /** Returns decoded WAV bytes ready to write to a file and play. */
     suspend fun synthesize(
         text: String,
         languageCode: String,
@@ -187,21 +313,21 @@ class SarvamClient(private val apiKey: String) {
 
     // ── Shared request plumbing ──────────────────────────────────────────
 
-    private fun execute(request: Request, what: String): JSONObject {
-        val raw = try {
-            client.newCall(request).execute().use { response ->
-                val text = response.body?.string().orEmpty()
-                if (!response.isSuccessful) throw SarvamException(errorMessage(what, response.code, text))
-                text
-            }
-        } catch (e: SarvamException) {
-            throw e
-        } catch (e: IOException) {
-            throw SarvamException("$what failed: check your internet connection.", e)
-        }
+    private data class HttpResult(val code: Int, val body: String, val success: Boolean)
 
+    private fun send(request: Request): HttpResult = try {
+        client.newCall(request).execute().use { response ->
+            HttpResult(response.code, response.body?.string().orEmpty(), response.isSuccessful)
+        }
+    } catch (e: IOException) {
+        throw SarvamException("Request failed: check your internet connection.", e)
+    }
+
+    private fun execute(request: Request, what: String): JSONObject {
+        val result = send(request)
+        if (!result.success) throw SarvamException(errorMessage(what, result.code, result.body))
         return try {
-            JSONObject(raw)
+            JSONObject(result.body)
         } catch (e: Exception) {
             throw SarvamException("$what returned an unexpected response.", e)
         }
@@ -220,6 +346,7 @@ class SarvamClient(private val apiKey: String) {
             402 -> "Your Sarvam account is out of credits."
             429 -> "Rate limited by Sarvam. Wait a moment and try again."
             in 500..599 -> "Sarvam's servers returned an error. Try again shortly."
+            // Surface the API's own wording — it usually names the replacement model.
             else -> detail.ifBlank { "HTTP $code" }
         }
         return "$what failed: $hint"

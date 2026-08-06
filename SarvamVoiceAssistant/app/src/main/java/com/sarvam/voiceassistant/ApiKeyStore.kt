@@ -31,6 +31,11 @@ class ApiKeyStore(context: Context) {
         get() = prefs.getString(KEY_LANGUAGE, Language.AUTO.code).orEmpty()
         set(value) = prefs.edit().putString(KEY_LANGUAGE, value).apply()
 
+    /** Empty means "let the client discover a model from /v1/models". */
+    var chatModel: String
+        get() = prefs.getString(KEY_CHAT_MODEL, "").orEmpty()
+        set(value) = prefs.edit().putString(KEY_CHAT_MODEL, value).apply()
+
     fun hasApiKey(): Boolean = apiKey.isNotBlank()
 
     private companion object {
@@ -40,6 +45,7 @@ class ApiKeyStore(context: Context) {
         const val KEY_API = "api_key"
         const val KEY_SPEAKER = "speaker"
         const val KEY_LANGUAGE = "input_language"
+        const val KEY_CHAT_MODEL = "chat_model"
 
         fun createPreferences(context: Context): SharedPreferences = try {
             val masterKey = MasterKey.Builder(context)

@@ -35,6 +35,11 @@ data class UiState(
     val hasApiKey: Boolean = false,
     val speaker: String = "",
     val inputLanguage: String = Language.AUTO.code,
+    /** Empty means the model is discovered automatically. */
+    val chatModel: String = "",
+    /** Chat models reported by /v1/models; empty until discovery runs or if it fails. */
+    val availableModels: List<String> = emptyList(),
+    val loadingModels: Boolean = false,
 ) {
     val isBusy: Boolean get() = stage != Stage.IDLE
 }
@@ -53,6 +58,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             hasApiKey = store.hasApiKey(),
             speaker = store.preferredSpeaker,
             inputLanguage = store.inputLanguage,
+            chatModel = store.chatModel,
         ),
     )
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
@@ -61,7 +67,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val amplitude: StateFlow<Float> = recorder.amplitude
 
     init {
-        if (store.hasApiKey()) client = SarvamClient(store.apiKey)
+        if (store.hasApiKey()) {
+            client = newClient(store.apiKey)
+            refreshModels()
+        }
+    }
+
+    private fun newClient(key: String) = SarvamClient(key).apply {
+        preferredChatModel = store.chatModel.ifBlank { null }
     }
 
     companion object {
@@ -75,11 +88,36 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun saveApiKey(key: String) {
         store.apiKey = key
-        client = if (key.isBlank()) null else SarvamClient(key)
+        client = if (key.isBlank()) null else newClient(key)
         _uiState.update { it.copy(hasApiKey = key.isNotBlank(), error = null) }
+        if (key.isNotBlank()) refreshModels()
     }
 
     fun currentApiKey(): String = store.apiKey
+
+    /**
+     * Ask the API which chat models this key can use. Silent on failure — the client still
+     * falls back and self-corrects on the next request, so a failed listing is not worth
+     * interrupting the user over.
+     */
+    fun refreshModels() {
+        val api = client ?: return
+        viewModelScope.launch {
+            _uiState.update { it.copy(loadingModels = true) }
+            val models = runCatching { api.listChatModels() }.getOrDefault(emptyList())
+            _uiState.update { it.copy(availableModels = models, loadingModels = false) }
+        }
+    }
+
+    /** Empty string means "discover automatically". */
+    fun setChatModel(model: String) {
+        store.chatModel = model
+        client?.apply {
+            preferredChatModel = model.ifBlank { null }
+            invalidateModelCache()
+        }
+        _uiState.update { it.copy(chatModel = model) }
+    }
 
     fun setSpeaker(speaker: String) {
         store.preferredSpeaker = speaker

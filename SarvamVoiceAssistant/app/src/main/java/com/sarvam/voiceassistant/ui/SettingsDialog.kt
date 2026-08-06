@@ -32,19 +32,22 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.sarvam.voiceassistant.Voices
 
-private const val AUTOMATIC_SPEAKER = ""
+private const val AUTOMATIC = ""
 
 @Composable
 fun SettingsDialog(
     initialApiKey: String,
     initialSpeaker: String,
-    onSave: (apiKey: String, speaker: String) -> Unit,
+    initialModel: String,
+    availableModels: List<String>,
+    loadingModels: Boolean,
+    onSave: (apiKey: String, speaker: String, model: String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     var apiKey by remember { mutableStateOf(initialApiKey) }
     var speaker by remember { mutableStateOf(initialSpeaker) }
+    var model by remember { mutableStateOf(initialModel) }
     var keyVisible by remember { mutableStateOf(false) }
-    var menuOpen by remember { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -88,47 +91,36 @@ fun SettingsDialog(
                 )
 
                 Spacer(Modifier.height(20.dp))
-                Text("Voice", style = MaterialTheme.typography.titleSmall)
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = "\"Automatic\" picks a voice to suit the detected language.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                SettingSection(
+                    title = "Chat model",
+                    hint = when {
+                        loadingModels -> "Checking which models your key can use…"
+                        availableModels.isEmpty() ->
+                            "Could not list models. \"Automatic\" still works — the app picks one " +
+                                "and corrects itself if the API rejects it."
+                        else -> "\"Automatic\" tracks whatever your key supports, so a model being " +
+                            "retired will not break the app."
+                    },
+                    selected = model,
+                    options = availableModels,
+                    automaticLabel = "Automatic (recommended)",
+                    onSelect = { model = it },
                 )
-                Spacer(Modifier.height(8.dp))
 
-                Box {
-                    OutlinedButton(onClick = { menuOpen = true }, modifier = Modifier.fillMaxWidth()) {
-                        Text(if (speaker == AUTOMATIC_SPEAKER) "Automatic" else speaker)
-                    }
-                    DropdownMenu(
-                        expanded = menuOpen,
-                        onDismissRequest = { menuOpen = false },
-                        modifier = Modifier.heightIn(max = 320.dp),
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("Automatic") },
-                            onClick = {
-                                speaker = AUTOMATIC_SPEAKER
-                                menuOpen = false
-                            },
-                        )
-                        Voices.ALL.forEach { name ->
-                            DropdownMenuItem(
-                                text = { Text(name) },
-                                onClick = {
-                                    speaker = name
-                                    menuOpen = false
-                                },
-                            )
-                        }
-                    }
-                }
+                Spacer(Modifier.height(20.dp))
+                SettingSection(
+                    title = "Voice",
+                    hint = "\"Automatic\" picks a voice to suit the detected language.",
+                    selected = speaker,
+                    options = Voices.ALL,
+                    automaticLabel = "Automatic",
+                    onSelect = { speaker = it },
+                )
             }
         },
         confirmButton = {
             TextButton(
-                onClick = { onSave(apiKey.trim(), speaker) },
+                onClick = { onSave(apiKey.trim(), speaker, model) },
                 enabled = apiKey.isNotBlank(),
             ) {
                 Text("Save")
@@ -138,4 +130,53 @@ fun SettingsDialog(
             TextButton(onClick = onDismiss) { Text("Cancel") }
         },
     )
+}
+
+@Composable
+private fun SettingSection(
+    title: String,
+    hint: String,
+    selected: String,
+    options: List<String>,
+    automaticLabel: String,
+    onSelect: (String) -> Unit,
+) {
+    var menuOpen by remember { mutableStateOf(false) }
+
+    Text(title, style = MaterialTheme.typography.titleSmall)
+    Spacer(Modifier.height(4.dp))
+    Text(
+        text = hint,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(8.dp))
+
+    Box {
+        OutlinedButton(onClick = { menuOpen = true }, modifier = Modifier.fillMaxWidth()) {
+            Text(if (selected == AUTOMATIC) automaticLabel else selected)
+        }
+        DropdownMenu(
+            expanded = menuOpen,
+            onDismissRequest = { menuOpen = false },
+            modifier = Modifier.heightIn(max = 320.dp),
+        ) {
+            DropdownMenuItem(
+                text = { Text(automaticLabel) },
+                onClick = {
+                    onSelect(AUTOMATIC)
+                    menuOpen = false
+                },
+            )
+            options.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(option) },
+                    onClick = {
+                        onSelect(option)
+                        menuOpen = false
+                    },
+                )
+            }
+        }
+    }
 }

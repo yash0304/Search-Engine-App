@@ -102,12 +102,20 @@ fun ChatScreen(viewModel: ChatViewModel) {
     }
 
     if (showSettings) {
+        // Re-check the model list each time Settings opens, so a newly added or retired
+        // model shows up without restarting the app.
+        LaunchedEffect(Unit) { viewModel.refreshModels() }
+
         SettingsDialog(
             initialApiKey = viewModel.currentApiKey(),
             initialSpeaker = state.speaker,
-            onSave = { key, speaker ->
+            initialModel = state.chatModel,
+            availableModels = state.availableModels,
+            loadingModels = state.loadingModels,
+            onSave = { key, speaker, model ->
                 viewModel.saveApiKey(key)
                 viewModel.setSpeaker(speaker)
+                viewModel.setChatModel(model)
                 showSettings = false
             },
             onDismiss = { showSettings = false },
