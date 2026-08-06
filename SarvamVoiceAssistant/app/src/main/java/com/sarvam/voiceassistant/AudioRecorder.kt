@@ -35,9 +35,9 @@ class AudioRecorder(private val outputDir: File) {
 
     companion object {
         const val SAMPLE_RATE = 16_000
-        private const val CHANNELS = 1
-        private const val BITS_PER_SAMPLE = 16
-        private const val HEADER_BYTES = 44
+        const val CHANNELS = 1
+        const val BITS_PER_SAMPLE = 16
+        private val HEADER_BYTES = WavHeader.SIZE
     }
 
     fun requestStop() {
@@ -98,7 +98,7 @@ class AudioRecorder(private val outputDir: File) {
                 }
 
                 out.seek(0)
-                out.write(wavHeader(pcmBytes.toInt()))
+                out.write(WavHeader.build(pcmBytes.toInt(), SAMPLE_RATE, CHANNELS, BITS_PER_SAMPLE))
             }
         } finally {
             runCatching { recorder.stop() }
@@ -123,25 +123,4 @@ class AudioRecorder(private val outputDir: File) {
         return min(1.0, level * 4).toFloat() // Speech rarely nears full scale; scale for visibility.
     }
 
-    /** Standard 44-byte canonical WAV header for 16-bit PCM. */
-    private fun wavHeader(pcmSize: Int): ByteArray {
-        val byteRate = SAMPLE_RATE * CHANNELS * BITS_PER_SAMPLE / 8
-        val blockAlign = CHANNELS * BITS_PER_SAMPLE / 8
-
-        return ByteBuffer.allocate(HEADER_BYTES).order(ByteOrder.LITTLE_ENDIAN).apply {
-            put("RIFF".toByteArray(Charsets.US_ASCII))
-            putInt(36 + pcmSize)
-            put("WAVE".toByteArray(Charsets.US_ASCII))
-            put("fmt ".toByteArray(Charsets.US_ASCII))
-            putInt(16)                        // PCM subchunk size
-            putShort(1)                       // Audio format 1 = PCM
-            putShort(CHANNELS.toShort())
-            putInt(SAMPLE_RATE)
-            putInt(byteRate)
-            putShort(blockAlign.toShort())
-            putShort(BITS_PER_SAMPLE.toShort())
-            put("data".toByteArray(Charsets.US_ASCII))
-            putInt(pcmSize)
-        }.array()
-    }
 }

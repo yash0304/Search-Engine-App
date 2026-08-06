@@ -59,6 +59,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.fragment.app.FragmentActivity
+import com.sarvam.voiceassistant.AppLock
 import com.sarvam.voiceassistant.ChatViewModel
 import com.sarvam.voiceassistant.Language
 import com.sarvam.voiceassistant.Message
@@ -75,6 +77,12 @@ fun ChatScreen(viewModel: ChatViewModel) {
     val snackbarHostState = remember { SnackbarHostState() }
     var showSettings by remember { mutableStateOf(false) }
     var draft by remember { mutableStateOf("") }
+
+    // Offering the lock toggle on a device with no screen lock would produce a switch that
+    // silently does nothing, so ask the platform first.
+    val lockAvailable = remember(context) {
+        (context as? FragmentActivity)?.let { AppLock(it).isAvailable() } ?: false
+    }
 
     val micPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -107,15 +115,23 @@ fun ChatScreen(viewModel: ChatViewModel) {
         LaunchedEffect(Unit) { viewModel.refreshModels() }
 
         SettingsDialog(
-            initialApiKey = viewModel.currentApiKey(),
+            hasSavedKey = state.hasApiKey,
+            maskedKey = viewModel.maskedKey(),
             initialSpeaker = state.speaker,
             initialModel = state.chatModel,
             availableModels = state.availableModels,
             loadingModels = state.loadingModels,
-            onSave = { key, speaker, model ->
-                viewModel.saveApiKey(key)
+            lockEnabled = state.lockEnabled,
+            lockAvailable = lockAvailable,
+            onSave = { key, speaker, model, lock ->
+                viewModel.saveApiKey(key) // Blank keeps the stored key.
                 viewModel.setSpeaker(speaker)
                 viewModel.setChatModel(model)
+                viewModel.setLockEnabled(lock)
+                showSettings = false
+            },
+            onClearKey = {
+                viewModel.clearApiKey()
                 showSettings = false
             },
             onDismiss = { showSettings = false },

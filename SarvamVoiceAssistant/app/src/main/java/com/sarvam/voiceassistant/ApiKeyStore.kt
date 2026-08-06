@@ -36,6 +36,17 @@ class ApiKeyStore(context: Context) {
         get() = prefs.getString(KEY_CHAT_MODEL, "").orEmpty()
         set(value) = prefs.edit().putString(KEY_CHAT_MODEL, value).apply()
 
+    /** Require biometric or device-credential auth to open the app. On by default. */
+    var lockEnabled: Boolean
+        get() = prefs.getBoolean(KEY_LOCK, true)
+        set(value) = prefs.edit().putBoolean(KEY_LOCK, value).apply()
+
+    /**
+     * A safe stand-in for the key, e.g. `sk_••••••7f3a`. The full key is never handed to the
+     * UI — showing it in Settings meant anyone holding the phone could read it.
+     */
+    fun maskedKey(): String = KeyMask.mask(apiKey)
+
     fun hasApiKey(): Boolean = apiKey.isNotBlank()
 
     private companion object {
@@ -46,6 +57,7 @@ class ApiKeyStore(context: Context) {
         const val KEY_SPEAKER = "speaker"
         const val KEY_LANGUAGE = "input_language"
         const val KEY_CHAT_MODEL = "chat_model"
+        const val KEY_LOCK = "lock_enabled"
 
         fun createPreferences(context: Context): SharedPreferences = try {
             val masterKey = MasterKey.Builder(context)

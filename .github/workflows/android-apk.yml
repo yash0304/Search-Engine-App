@@ -40,6 +40,17 @@ jobs:
           key: gradle-${{ runner.os }}-${{ hashFiles('SarvamVoiceAssistant/**/*.gradle.kts', 'SarvamVoiceAssistant/gradle/libs.versions.toml') }}
           restore-keys: gradle-${{ runner.os }}-
 
+      - name: Run unit tests
+        run: ./gradlew --no-daemon testDebugUnitTest
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-report
+          path: SarvamVoiceAssistant/app/build/reports/tests/testDebugUnitTest
+          if-no-files-found: ignore
+
       - name: Build debug APK
         run: ./gradlew --no-daemon assembleDebug
 

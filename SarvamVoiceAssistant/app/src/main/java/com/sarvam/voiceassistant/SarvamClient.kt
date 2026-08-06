@@ -63,24 +63,6 @@ class SarvamClient(private val apiKey: String) {
         private const val STT_MODEL = "saaras:v3"
         private const val TTS_MODEL = "bulbul:v3"
 
-        /** Used only when `/v1/models` cannot be reached at all. */
-        const val FALLBACK_CHAT_MODEL = "sarvam-105b"
-
-        /**
-         * Auto-selection order among whatever the account actually exposes. Anything not
-         * listed here still gets used if it is the only chat model available, so a future
-         * model works without a code change.
-         */
-        private val CHAT_MODEL_PREFERENCE = listOf("sarvam-105b", "sarvam-30b")
-
-        /** Substrings that mark a model id as speech/translation rather than chat. */
-        private val NON_CHAT_HINTS = listOf(
-            "saaras", "bulbul", "mayura", "translate", "vision",
-            "tts", "stt", "embed", "ocr", "parse", "rerank",
-        )
-
-        private val MODEL_ID_PATTERN = Regex("""sarvam[a-zA-Z0-9_.\-]*""")
-
         private const val TTS_CHAR_LIMIT = 1500
         private const val HISTORY_TURNS = 8
 
@@ -121,21 +103,9 @@ class SarvamClient(private val apiKey: String) {
             }
         }
 
-        val chatModels = ids.filter(::looksLikeChatModel)
-            .sortedBy { id ->
-                // Keep the preferred ones on top; everything else follows in API order.
-                CHAT_MODEL_PREFERENCE.indexOf(id).takeIf { it >= 0 } ?: CHAT_MODEL_PREFERENCE.size
-            }
-
+        val chatModels = ChatModels.rank(ids)
         cachedModels = chatModels
         chatModels
-    }
-
-    private fun looksLikeChatModel(id: String): Boolean {
-        val lower = id.lowercase()
-        // Speech models use a colon-versioned form such as `saaras:v3`.
-        if (lower.contains(':')) return false
-        return NON_CHAT_HINTS.none { lower.contains(it) }
     }
 
     /** Forget the discovered list so the next call re-queries the API. */
@@ -153,9 +123,7 @@ class SarvamClient(private val apiKey: String) {
 
         // A failure here must not block chatting — fall back and let the retry path correct us.
         val available = runCatching { listChatModels() }.getOrDefault(emptyList())
-        val picked = CHAT_MODEL_PREFERENCE.firstOrNull { it in available }
-            ?: available.firstOrNull()
-            ?: FALLBACK_CHAT_MODEL
+        val picked = ChatModels.pick(available)
 
         resolvedChatModel = picked
         return picked
@@ -211,7 +179,7 @@ class SarvamClient(private val apiKey: String) {
         if (!result.success && isModelRejected(result)) {
             // The model went away underneath us. Take the replacement the error names,
             // otherwise re-ask /v1/models, then try exactly once more.
-            val suggested = suggestedModelFrom(result.body, model)
+            val suggested = ChatModels.suggestedFrom(result.body, model)
             invalidateModelCache()
             val retryModel = suggested ?: resolveChatModel().takeIf { it != model }
 
@@ -236,7 +204,7 @@ class SarvamClient(private val apiKey: String) {
         // chain-of-thought — never read it here, or the assistant reads its own thinking
         // aloud. stringOrNull matters too: Android's optString turns a JSON null into the
         // literal string "null".
-        val reply = message.stringOrNull("content")?.let(::stripThinking).orEmpty()
+        val reply = message.stringOrNull("content")?.let(ChatModels::stripThinking).orEmpty()
 
         if (reply.isEmpty()) {
             val thoughtInstead = message.stringOrNull("reasoning_content") != null
@@ -287,13 +255,6 @@ class SarvamClient(private val apiKey: String) {
         return listOf("deprecat", "not found", "unsupported", "invalid", "unavailable", "retired")
             .any { body.contains(it) }
     }
-
-    /** Pull a replacement model id out of an error message, ignoring the one we just tried. */
-    private fun suggestedModelFrom(body: String, tried: String): String? =
-        MODEL_ID_PATTERN.findAll(body)
-            .map { it.value.trimEnd('.', ',', ';', ':', '-', '_', ')', '"', '\'') }
-            .filter { it.isNotBlank() && it != tried && looksLikeChatModel(it) }
-            .firstOrNull()
 
     // ── 3. Text to speech ────────────────────────────────────────────────
 
@@ -392,6 +353,3 @@ private fun JSONObject.stringOrNull(key: String): String? {
     return value.takeIf { it.isNotEmpty() && it != "null" }
 }
 
-/** Removes `<think>…</think>` blocks that reasoning models sometimes inline in the reply. */
-private fun stripThinking(text: String): String =
-    text.replace(Regex("(?s)<think>.*?</think>"), "").trim()

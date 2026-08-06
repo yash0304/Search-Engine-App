@@ -40,6 +40,7 @@ data class UiState(
     /** Chat models reported by /v1/models; empty until discovery runs or if it fails. */
     val availableModels: List<String> = emptyList(),
     val loadingModels: Boolean = false,
+    val lockEnabled: Boolean = true,
 ) {
     val isBusy: Boolean get() = stage != Stage.IDLE
 }
@@ -59,6 +60,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             speaker = store.preferredSpeaker,
             inputLanguage = store.inputLanguage,
             chatModel = store.chatModel,
+            lockEnabled = store.lockEnabled,
         ),
     )
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
@@ -86,14 +88,37 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     // ── Settings ─────────────────────────────────────────────────────────
 
+    /**
+     * A blank [key] means "leave the stored key alone" — Settings shows only a masked
+     * placeholder, so an empty field is the normal case when changing other settings.
+     */
     fun saveApiKey(key: String) {
+        if (key.isBlank()) return
+
         store.apiKey = key
-        client = if (key.isBlank()) null else newClient(key)
-        _uiState.update { it.copy(hasApiKey = key.isNotBlank(), error = null) }
-        if (key.isNotBlank()) refreshModels()
+        client = newClient(key)
+        _uiState.update { it.copy(hasApiKey = true, error = null) }
+        refreshModels()
     }
 
-    fun currentApiKey(): String = store.apiKey
+    fun clearApiKey() {
+        store.apiKey = ""
+        client = null
+        _uiState.update { it.copy(hasApiKey = false, availableModels = emptyList()) }
+    }
+
+    /**
+     * A masked stand-in such as `sk_••••••7f3a`. The real key is deliberately never exposed
+     * to the UI layer, so it cannot be read off the screen or captured in a screenshot.
+     */
+    fun maskedKey(): String = store.maskedKey()
+
+    fun isLockEnabled(): Boolean = store.lockEnabled
+
+    fun setLockEnabled(enabled: Boolean) {
+        store.lockEnabled = enabled
+        _uiState.update { it.copy(lockEnabled = enabled) }
+    }
 
     /**
      * Ask the API which chat models this key can use. Silent on failure — the client still
@@ -154,9 +179,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
+        // Set synchronously: launch{} does not run until the dispatcher schedules it, so a
+        // fast second tap would otherwise still see IDLE and open a second AudioRecord.
+        setStage(Stage.RECORDING)
+
         pipeline = viewModelScope.launch {
             try {
-                setStage(Stage.RECORDING)
                 val audio = recorder.record(MAX_RECORD_MS)
 
                 setStage(Stage.TRANSCRIBING)
@@ -183,6 +211,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             showError("Add your Sarvam API key in Settings first.")
             return
         }
+
+        // Same reasoning as startVoiceTurn: claim the busy state before suspending.
+        setStage(Stage.THINKING)
 
         pipeline = viewModelScope.launch {
             try {
