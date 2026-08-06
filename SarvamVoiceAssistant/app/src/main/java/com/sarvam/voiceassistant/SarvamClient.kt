@@ -114,8 +114,7 @@ class SarvamClient(private val apiKey: String) {
 
         val ids = buildList {
             for (i in 0 until data.length()) {
-                val id = data.optJSONObject(i)?.optString("id").orEmpty()
-                if (id.isNotBlank()) add(id)
+                data.optJSONObject(i)?.stringOrNull("id")?.let { add(it) }
             }
         }
 
@@ -182,13 +181,12 @@ class SarvamClient(private val apiKey: String) {
                 .build()
 
             val json = execute(request, "Transcription")
-            val transcript = json.optString("transcript").trim()
-            if (transcript.isEmpty()) {
-                throw SarvamException("Nothing was recognised in that recording. Try speaking a little louder.")
-            }
-            val detected = json.optString("language_code")
-                .ifBlank { json.optString("language") }
-                .ifBlank { "unknown" }
+            val transcript = json.stringOrNull("transcript")
+                ?: throw SarvamException("Nothing was recognised in that recording. Try speaking a little louder.")
+
+            val detected = json.stringOrNull("language_code")
+                ?: json.stringOrNull("language")
+                ?: "unknown"
 
             Transcription(transcript, Language.spokenOrDefault(detected))
         }
@@ -226,11 +224,16 @@ class SarvamClient(private val apiKey: String) {
         val json = runCatching { JSONObject(result.body) }.getOrNull()
             ?: throw SarvamException("Assistant reply returned an unexpected response.")
 
-        val reply = json.optJSONArray("choices")
+        val message = json.optJSONArray("choices")
             ?.optJSONObject(0)
             ?.optJSONObject("message")
-            ?.optString("content")
-            ?.trim()
+            ?: throw SarvamException("Assistant reply contained no message.")
+
+        // Reasoning models leave `content` JSON-null and put the prose in `reasoning_content`,
+        // so fall through to it. stringOrNull is essential here: Android's optString renders a
+        // JSON null as the literal string "null", which otherwise gets spoken aloud verbatim.
+        val reply = (message.stringOrNull("content") ?: message.stringOrNull("reasoning_content"))
+            ?.let(::stripThinking)
             .orEmpty()
 
         if (reply.isEmpty()) throw SarvamException("The model returned an empty reply.")
@@ -297,9 +300,10 @@ class SarvamClient(private val apiKey: String) {
 
         val json = execute(request, "Speech synthesis")
         // Documented shape is {"audios": ["<base64>"]}; accept a bare string too.
-        // optString returns "" rather than null for an empty array, so blank-check both branches.
-        val encoded = json.optJSONArray("audios")?.optString(0)?.takeIf { it.isNotBlank() }
-            ?: json.optString("audio").takeIf { it.isNotBlank() }
+        val encoded = json.optJSONArray("audios")
+            ?.optString(0)
+            ?.takeIf { it.isNotBlank() && it != "null" }
+            ?: json.stringOrNull("audio")
             ?: throw SarvamException("Speech synthesis returned no audio.")
 
         try {
@@ -336,9 +340,9 @@ class SarvamClient(private val apiKey: String) {
     private fun errorMessage(what: String, code: Int, body: String): String {
         val detail = runCatching {
             val json = JSONObject(body)
-            json.optString("error")
-                .ifBlank { json.optJSONObject("error")?.optString("message").orEmpty() }
-                .ifBlank { json.optString("message") }
+            json.stringOrNull("error")
+                ?: json.optJSONObject("error")?.stringOrNull("message")
+                ?: json.stringOrNull("message")
         }.getOrNull().orEmpty()
 
         val hint = when (code) {
@@ -355,3 +359,20 @@ class SarvamClient(private val apiKey: String) {
 
 private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
 private const val WAV_HEADER_BYTES = 44L
+
+/**
+ * Reads a string field, treating JSON null as absent.
+ *
+ * Android's [JSONObject.optString] stringifies `JSONObject.NULL` to the literal `"null"`
+ * instead of returning the fallback, so a null field silently becomes the four-character
+ * word "null". Every string read from an API response must go through this.
+ */
+private fun JSONObject.stringOrNull(key: String): String? {
+    if (isNull(key)) return null
+    val value = optString(key).trim()
+    return value.takeIf { it.isNotEmpty() && it != "null" }
+}
+
+/** Removes `<think>…</think>` blocks that reasoning models sometimes inline in the reply. */
+private fun stripThinking(text: String): String =
+    text.replace(Regex("(?s)<think>.*?</think>"), "").trim()
