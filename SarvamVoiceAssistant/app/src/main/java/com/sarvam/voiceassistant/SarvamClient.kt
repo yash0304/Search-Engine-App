@@ -22,7 +22,7 @@ class SarvamException(message: String, cause: Throwable? = null) : Exception(mes
  * Thin client over the three Sarvam AI REST endpoints this app uses.
  *
  *  STT  POST /speech-to-text       multipart, model `saaras:v3`
- *  LLM  POST /v1/chat/completions  JSON, model `sarvam-m`
+ *  LLM  POST /v1/chat/completions  JSON, model `sarvam-30b`
  *  TTS  POST /text-to-speech       JSON, model `bulbul:v3`
  *
  * Every call authenticates with the `api-subscription-key` header. The chat endpoint is
@@ -46,7 +46,14 @@ class SarvamClient(private val apiKey: String) {
     companion object {
         private const val BASE_URL = "https://api.sarvam.ai"
         private const val STT_MODEL = "saaras:v3"
-        private const val CHAT_MODEL = "sarvam-m"
+
+        /**
+         * `sarvam-m` (24B) is deprecated on the chat endpoint. `sarvam-30b` is the right
+         * default here: replies are 2-3 spoken sentences, so the extra quality of
+         * `sarvam-105b` buys little while its latency is felt on every single turn.
+         * Swap to "sarvam-105b" if you want stronger reasoning and can accept the wait.
+         */
+        private const val CHAT_MODEL = "sarvam-30b"
         private const val TTS_MODEL = "bulbul:v3"
 
         /** Sarvam caps a single text-to-speech request; keep well under it. */

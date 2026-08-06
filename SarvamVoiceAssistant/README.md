@@ -4,7 +4,7 @@ A trilingual (Gujarati · Hindi · English) push-to-talk voice assistant, built 
 REST APIs. Native Kotlin, Jetpack Compose, Material 3.
 
 ```
-🎤 Mic ─▶ saaras:v3 (STT) ─▶ sarvam-m (LLM) ─▶ bulbul:v3 (TTS) ─▶ 🔊 Speaker
+🎤 Mic ─▶ saaras:v3 (STT) ─▶ sarvam-30b (LLM) ─▶ bulbul:v3 (TTS) ─▶ 🔊 Speaker
 ```
 
 The assistant detects which language you spoke and replies in that same language, out loud.
@@ -71,6 +71,9 @@ the artifact, unzip, and sideload the APK (enable "Install unknown apps" on your
   language-locked; any voice can speak any supported language. Names are case-sensitive and
   lowercase, and a name outside `Voices.ALL` is rejected by the API with an HTTP 400.
 - **Personality** — edit `SYSTEM_PROMPT` in `SarvamClient.kt`.
+- **Chat model** — `CHAT_MODEL` in `SarvamClient.kt`. `sarvam-30b` (64K context) is the
+  default; `sarvam-105b` (128K) reasons better but adds latency to every turn. The older
+  `sarvam-m` is deprecated on the chat endpoint and will be rejected.
 - **Recording limit** — `MAX_RECORD_MS` in `ChatViewModel.kt`. The speech-to-text endpoint
   accepts at most 30 seconds of audio per request, so keep it under that.
 - **Conversation memory** — `HISTORY_TURNS` in `SarvamClient.kt`.
