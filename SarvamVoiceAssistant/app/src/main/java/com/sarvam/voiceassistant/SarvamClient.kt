@@ -27,7 +27,8 @@ class SarvamException(message: String, cause: Throwable? = null) : Exception(mes
  *  Models  GET  /v1/models            OpenAI-compatible model listing
  *
  * Every call authenticates with the `api-subscription-key` header. The OpenAI-compatible
- * endpoints also accept `Authorization: Bearer`, so both are sent there.
+ * endpoints additionally try `Authorization: Bearer`, falling back to the subscription key
+ * alone if that is rejected — see [sendAuthenticated].
  *
  * The chat model is *not* hardcoded. Sarvam has retired chat models more than once
  * (`sarvam-m`, then `sarvam-30b`), and each retirement broke every pinned client. Instead
@@ -68,14 +69,6 @@ class SarvamClient(private val apiKey: String) {
 
         /** Headroom in case a deployment ignores `reasoning_effort` and thinks anyway. */
         private const val MAX_TOKENS = 800
-
-        private val SYSTEM_PROMPT = """
-            You are a helpful, friendly voice assistant.
-            You understand Gujarati, Hindi, and English, including code-mixed speech.
-            ALWAYS reply in the SAME language the user spoke — never switch unless asked.
-            Keep answers short and conversational, at most 2-3 sentences, because they are spoken aloud.
-            Never use markdown, bullet points, emoji, or special formatting characters.
-        """.trimIndent()
     }
 
     // ── Model discovery ──────────────────────────────────────────────────
@@ -163,7 +156,8 @@ class SarvamClient(private val apiKey: String) {
         // Build the turn without mutating history, so a failed call leaves no residue.
         val pending = JSONObject().put("role", "user").put("content", userText)
         val messages = JSONArray().apply {
-            put(JSONObject().put("role", "system").put("content", SYSTEM_PROMPT))
+            // Rebuilt each turn so the injected date never goes stale mid-session.
+            put(JSONObject().put("role", "system").put("content", SystemPrompt.now()))
             history.takeLast(HISTORY_TURNS).forEach { put(it) }
             put(pending)
         }
