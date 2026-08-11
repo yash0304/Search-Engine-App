@@ -42,6 +42,7 @@ data class UiState(
     val loadingModels: Boolean = false,
     val lockEnabled: Boolean = true,
     val webSearchEnabled: Boolean = true,
+    val locationEnabled: Boolean = true,
     /** The query the model is currently looking up, for the status line. */
     val searchQuery: String? = null,
 ) {
@@ -53,6 +54,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val store = ApiKeyStore(application)
     private val recorder = AudioRecorder(application.cacheDir)
     private val player = AudioPlayer()
+    private val location = LocationProvider(application)
 
     private var client: SarvamClient? = null
     private var pipeline: Job? = null
@@ -65,6 +67,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             chatModel = store.chatModel,
             lockEnabled = store.lockEnabled,
             webSearchEnabled = store.webSearchEnabled,
+            locationEnabled = store.locationEnabled,
         ),
     )
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
@@ -82,6 +85,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private fun newClient(key: String) = SarvamClient(key).apply {
         preferredChatModel = store.chatModel.ifBlank { null }
         webSearchEnabled = store.webSearchEnabled
+        // Resolved lazily per tool call, so a denied permission simply yields null and the
+        // model asks the user to name a place instead.
+        locationSource = { if (store.locationEnabled) location.current() else null }
     }
 
     companion object {
@@ -119,6 +125,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun maskedKey(): String = store.maskedKey()
 
     fun isLockEnabled(): Boolean = store.lockEnabled
+
+    fun setLocationEnabled(enabled: Boolean) {
+        store.locationEnabled = enabled
+        _uiState.update { it.copy(locationEnabled = enabled) }
+    }
+
+    /** True when the OS has already granted a location permission. */
+    fun hasLocationPermission(): Boolean = location.hasPermission()
 
     fun setWebSearchEnabled(enabled: Boolean) {
         store.webSearchEnabled = enabled

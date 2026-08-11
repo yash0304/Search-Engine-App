@@ -4,9 +4,18 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
+    <!-- Foreground only: the assistant needs the position at the moment you ask,
+         never while the app is closed. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
     <uses-feature
         android:name="android.hardware.microphone"
         android:required="true" />
+
+    <uses-feature
+        android:name="android.hardware.location"
+        android:required="false" />
 
     <application
         android:allowBackup="false"

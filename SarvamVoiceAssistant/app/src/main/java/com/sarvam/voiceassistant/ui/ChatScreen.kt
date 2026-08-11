@@ -63,6 +63,7 @@ import androidx.fragment.app.FragmentActivity
 import com.sarvam.voiceassistant.AppLock
 import com.sarvam.voiceassistant.ChatViewModel
 import com.sarvam.voiceassistant.Language
+import com.sarvam.voiceassistant.LocationProvider
 import com.sarvam.voiceassistant.Message
 import com.sarvam.voiceassistant.Role
 import com.sarvam.voiceassistant.Stage
@@ -83,6 +84,10 @@ fun ChatScreen(viewModel: ChatViewModel) {
     val lockAvailable = remember(context) {
         (context as? FragmentActivity)?.let { AppLock(it).isAvailable() } ?: false
     }
+
+    val locationPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { /* Denied simply means location questions ask for a place name. */ }
 
     val micPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -124,12 +129,19 @@ fun ChatScreen(viewModel: ChatViewModel) {
             lockEnabled = state.lockEnabled,
             lockAvailable = lockAvailable,
             webSearchEnabled = state.webSearchEnabled,
-            onSave = { key, speaker, model, lock, webSearch ->
+            locationEnabled = state.locationEnabled,
+            onSave = { key, speaker, model, lock, webSearch, useLocation ->
                 viewModel.saveApiKey(key) // Blank keeps the stored key.
                 viewModel.setSpeaker(speaker)
                 viewModel.setChatModel(model)
                 viewModel.setLockEnabled(lock)
                 viewModel.setWebSearchEnabled(webSearch)
+                viewModel.setLocationEnabled(useLocation)
+                // Ask for the permission at the moment it is switched on, so the prompt has
+                // obvious context rather than appearing at launch.
+                if (useLocation && !viewModel.hasLocationPermission()) {
+                    locationPermission.launch(LocationProvider.PERMISSIONS)
+                }
                 showSettings = false
             },
             onClearKey = {

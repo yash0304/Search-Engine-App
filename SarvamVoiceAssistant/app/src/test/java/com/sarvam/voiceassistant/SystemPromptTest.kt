@@ -36,10 +36,25 @@ class SystemPromptTest {
     }
 
     @Test
-    fun `admits it cannot look up live information`() {
+    fun `says it can check weather`() {
         val prompt = SystemPrompt.build(moment).lowercase()
-        assertTrue(prompt.contains("no internet access"))
         assertTrue(prompt.contains("weather"))
+        assertTrue(prompt.contains("rain"))
+    }
+
+    @Test
+    fun `admits it cannot check road traffic`() {
+        // There is no free source for Indian road incidents, so the model must not guess —
+        // a wrong answer about a jam is worse than no answer to someone driving.
+        val prompt = SystemPrompt.build(moment).lowercase()
+        assertTrue(prompt.contains("cannot check live road traffic"))
+        assertTrue(prompt.contains("never guess"))
+    }
+
+    @Test
+    fun `asks for distances rather than vague answers`() {
+        val prompt = SystemPrompt.build(moment)
+        assertTrue(prompt.contains("distances"))
     }
 
     @Test

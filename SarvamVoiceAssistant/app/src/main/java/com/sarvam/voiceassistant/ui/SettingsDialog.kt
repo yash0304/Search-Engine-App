@@ -55,7 +55,8 @@ fun SettingsDialog(
     lockEnabled: Boolean,
     lockAvailable: Boolean,
     webSearchEnabled: Boolean,
-    onSave: (apiKey: String, speaker: String, model: String, lock: Boolean, webSearch: Boolean) -> Unit,
+    locationEnabled: Boolean,
+    onSave: (apiKey: String, speaker: String, model: String, lock: Boolean, webSearch: Boolean, location: Boolean) -> Unit,
     onClearKey: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -64,6 +65,7 @@ fun SettingsDialog(
     var model by remember { mutableStateOf(initialModel) }
     var lock by remember { mutableStateOf(lockEnabled) }
     var webSearch by remember { mutableStateOf(webSearchEnabled) }
+    var useLocation by remember { mutableStateOf(locationEnabled) }
     var keyVisible by remember { mutableStateOf(false) }
 
     AlertDialog(
@@ -142,6 +144,16 @@ fun SettingsDialog(
                     onCheckedChange = { webSearch = it },
                 )
 
+                Spacer(Modifier.height(16.dp))
+                ToggleRow(
+                    title = "Use my location",
+                    hint = "Lets you ask \"is it raining here\" without naming a place. " +
+                        "Used only while the app is open.",
+                    checked = useLocation,
+                    enabled = true,
+                    onCheckedChange = { useLocation = it },
+                )
+
                 Spacer(Modifier.height(20.dp))
                 SettingSection(
                     title = "Chat model",
@@ -172,7 +184,7 @@ fun SettingsDialog(
         },
         confirmButton = {
             TextButton(
-                onClick = { onSave(apiKey.trim(), speaker, model, lock, webSearch) },
+                onClick = { onSave(apiKey.trim(), speaker, model, lock, webSearch, useLocation) },
                 // With no key saved yet, one must be entered before anything can work.
                 enabled = hasSavedKey || apiKey.isNotBlank(),
             ) {

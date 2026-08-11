@@ -68,6 +68,7 @@ dependencies {
 
     implementation(libs.androidx.security.crypto)
     implementation(libs.androidx.biometric)
+    implementation(libs.play.services.location)
     implementation(libs.okhttp)
 
     testImplementation(libs.junit)

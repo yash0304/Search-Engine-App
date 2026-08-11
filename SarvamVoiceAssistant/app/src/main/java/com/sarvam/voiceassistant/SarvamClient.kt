@@ -50,6 +50,11 @@ class SarvamClient(private val apiKey: String) {
     private val history = mutableListOf<JSONObject>()
 
     private val webSearch = WebSearch()
+    private val weather = WeatherService()
+
+    /** Supplies the device position for location-aware tools; null when unavailable. */
+    @Volatile
+    var locationSource: (suspend () -> Coordinates?)? = null
 
     /** Explicit user choice from Settings. Blank or null means auto-resolve. */
     @Volatile
@@ -76,7 +81,9 @@ class SarvamClient(private val apiKey: String) {
         /** Headroom in case a deployment ignores `reasoning_effort` and thinks anyway. */
         private const val MAX_TOKENS = 800
 
-        const val TOOL_NAME = "web_search"
+        const val TOOL_SEARCH = "web_search"
+        const val TOOL_WEATHER = "get_weather"
+        const val TOOL_RAIN_ROUTE = "rain_on_route"
 
         /** How many times the model may search before it has to answer. */
         private const val MAX_TOOL_ROUNDS = 2
@@ -217,62 +224,66 @@ class SarvamClient(private val apiKey: String) {
         val name = function?.stringOrNull("name").orEmpty()
 
         // Arguments arrive as a JSON string, not an object.
-        val query = runCatching {
-            JSONObject(function?.stringOrNull("arguments").orEmpty()).stringOrNull("query")
-        }.getOrNull().orEmpty()
+        val arguments = runCatching {
+            JSONObject(function?.stringOrNull("arguments").orEmpty())
+        }.getOrNull() ?: JSONObject()
 
-        val output = when {
-            name != TOOL_NAME -> "Unknown tool: $name"
-            query.isBlank() -> "No search query was provided."
-            else -> {
-                onSearching(query)
-                // A failed lookup must not fail the turn — the model can still answer.
-                runCatching { webSearch.search(query) }
-                    .getOrElse { "The search could not be completed: ${it.message}" }
+        // A failed lookup must never fail the turn — the model can still answer without it.
+        val output = runCatching {
+            when (name) {
+                TOOL_SEARCH -> {
+                    val query = arguments.stringOrNull("query")
+                    if (query == null) "No search query was provided." else {
+                        onSearching(query)
+                        webSearch.search(query)
+                    }
+                }
+
+                TOOL_WEATHER -> {
+                    val place = arguments.stringOrNull("place")
+                    onSearching(place ?: "the weather here")
+                    resolvePlace(place)?.let { weather.conditionsAt(it.name, it.coordinates) }
+                        ?: unresolved(place)
+                }
+
+                TOOL_RAIN_ROUTE -> {
+                    val to = arguments.stringOrNull("to")
+                    val from = arguments.stringOrNull("from")
+                    onSearching(listOfNotNull(from, to).joinToString(" to ").ifBlank { "the route" })
+
+                    val destination = to?.let { weather.geocode(it) }
+                    val origin = resolvePlace(from)
+
+                    when {
+                        destination == null -> unresolved(to)
+                        origin == null -> unresolved(from)
+                        else -> weather.rainAlongRoute(origin, destination)
+                    }
+                }
+
+                else -> "Unknown tool: $name"
             }
-        }
+        }.getOrElse { "That lookup could not be completed: ${it.message}" }
 
         return JSONObject()
             .put("role", "tool")
             .put("tool_call_id", id)
-            .put("name", name.ifBlank { TOOL_NAME })
+            .put("name", name.ifBlank { TOOL_SEARCH })
             .put("content", output)
     }
 
-    /**
-     * OpenAI-style tool declaration. The description is what the model reasons over when
-     * deciding whether to search, so it spells out when *not* to — an unnecessary lookup
-     * adds a full round trip, which is felt in a spoken conversation.
-     */
-    private fun searchToolSchema(): JSONArray {
-        val parameters = JSONObject()
-            .put("type", "object")
-            .put(
-                "properties",
-                JSONObject().put(
-                    "query",
-                    JSONObject()
-                        .put("type", "string")
-                        .put("description", "Search keywords, in English, for the fact to look up."),
-                ),
-            )
-            .put("required", JSONArray().put("query"))
+    /** A named place, or the device's position when the model omitted the name. */
+    private suspend fun resolvePlace(place: String?): GeocodedPlace? {
+        if (place != null) return weather.geocode(place)
 
-        val function = JSONObject()
-            .put("name", TOOL_NAME)
-            .put(
-                "description",
-                "Look up current information on the web. Use this for anything that happened " +
-                    "recently, for facts that change over time, or when you are unsure whether " +
-                    "your knowledge is current. Do NOT use it for greetings, chit-chat, " +
-                    "opinions, translation, or arithmetic.",
-            )
-            .put("parameters", parameters)
-
-        return JSONArray().put(JSONObject().put("type", "function").put("function", function))
+        val here = locationSource?.invoke() ?: return null
+        return GeocodedPlace("your current location", here)
     }
 
-    private data class Completion(val message: JSONObject, val finishReason: String)
+    private fun unresolved(place: String?): String = when (place) {
+        null -> "The user's location is not available. Ask them which place they mean."
+        else -> "The place \"$place\" could not be found. Ask the user to name it differently."
+    }
 
     /** One round trip to the chat endpoint, including recovery from a retired model. */
     private suspend fun requestCompletion(messages: JSONArray): Completion {
@@ -342,7 +353,7 @@ class SarvamClient(private val apiKey: String) {
             // finish_reason "length", and only reasoning_content populated.
             // JSONObject.NULL is required: put(key, null) would drop the field entirely.
             .put("reasoning_effort", JSONObject.NULL)
-            .apply { if (webSearchEnabled) put("tools", searchToolSchema()) }
+            .apply { if (webSearchEnabled) put("tools", toolSchemas()) }
 
         return sendAuthenticated { builder ->
             builder.url("$BASE_URL/v1/chat/completions")
