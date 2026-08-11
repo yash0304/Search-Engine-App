@@ -285,6 +285,79 @@ class SarvamClient(private val apiKey: String) {
         else -> "The place \"$place\" could not be found. Ask the user to name it differently."
     }
 
+    /**
+     * OpenAI-style tool declarations. Descriptions matter as much as the code: they are what
+     * the model reasons over when deciding whether a lookup is worth a round trip, so each
+     * says plainly when *not* to use it.
+     */
+    private fun toolSchemas(): JSONArray {
+        fun stringParam(description: String) =
+            JSONObject().put("type", "string").put("description", description)
+
+        fun tool(
+            name: String,
+            description: String,
+            properties: JSONObject,
+            required: List<String>,
+        ): JSONObject {
+            val parameters = JSONObject()
+                .put("type", "object")
+                .put("properties", properties)
+                .put("required", JSONArray().apply { required.forEach { put(it) } })
+
+            return JSONObject().put("type", "function").put(
+                "function",
+                JSONObject()
+                    .put("name", name)
+                    .put("description", description)
+                    .put("parameters", parameters),
+            )
+        }
+
+        return JSONArray()
+            .put(
+                tool(
+                    name = TOOL_SEARCH,
+                    description = "Look up current information on the web. Use this for anything " +
+                        "that happened recently, for facts that change over time, or when you are " +
+                        "unsure whether your knowledge is current. Do NOT use it for greetings, " +
+                        "chit-chat, opinions, translation, arithmetic, or weather.",
+                    properties = JSONObject().put(
+                        "query",
+                        stringParam("Search keywords, in English, for the fact to look up."),
+                    ),
+                    required = listOf("query"),
+                ),
+            )
+            .put(
+                tool(
+                    name = TOOL_WEATHER,
+                    description = "Get live weather and whether it is raining at a place. Use this " +
+                        "for any question about rain, temperature or conditions right now. Omit " +
+                        "'place' to mean where the user currently is.",
+                    properties = JSONObject().put(
+                        "place",
+                        stringParam("City or place name in English. Omit for the user's location."),
+                    ),
+                    required = emptyList(),
+                ),
+            )
+            .put(
+                tool(
+                    name = TOOL_RAIN_ROUTE,
+                    description = "Find where along a journey it is raining, with distances. Use " +
+                        "this whenever the user asks about rain on the way somewhere, or between " +
+                        "two places. Omit 'from' to start from where the user currently is.",
+                    properties = JSONObject()
+                        .put("from", stringParam("Starting place. Omit for the user's location."))
+                        .put("to", stringParam("Destination place name, in English.")),
+                    required = listOf("to"),
+                ),
+            )
+    }
+
+    private data class Completion(val message: JSONObject, val finishReason: String)
+
     /** One round trip to the chat endpoint, including recovery from a retired model. */
     private suspend fun requestCompletion(messages: JSONArray): Completion {
         var model = resolveChatModel()
