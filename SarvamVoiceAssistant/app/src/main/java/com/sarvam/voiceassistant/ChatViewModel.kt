@@ -55,6 +55,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val recorder = AudioRecorder(application.cacheDir)
     private val player = AudioPlayer()
     private val location = LocationProvider(application)
+    private val dictionary = OfflineDictionary(application)
 
     private var client: SarvamClient? = null
     private var pipeline: Job? = null
@@ -88,6 +89,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         // Resolved lazily per tool call, so a denied permission simply yields null and the
         // model asks the user to name a place instead.
         locationSource = { if (store.locationEnabled) location.current() else null }
+        dictionarySource = { word -> dictionary.lookup(word) }
     }
 
     companion object {
@@ -306,5 +308,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         super.onCleared()
         recorder.requestStop()
         player.stop()
+        dictionary.close()
     }
 }

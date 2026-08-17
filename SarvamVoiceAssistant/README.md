@@ -100,6 +100,39 @@ provider per category, each with its own API key.
 
 Search failures never break a turn — the model is told the lookup failed and answers anyway.
 
+## Offline dictionary
+
+Ask what a word means and the answer comes from a real dictionary on the device, not from
+the model's memory. Asking a language model for a definition invites invention — it will
+produce a confident meaning for a word that does not exist. A dictionary either has the
+word or it does not, and *"not in the dictionary"* is a correct answer.
+
+- **Princeton WordNet 3.1**: 147k words, 207k senses, definitions **and** synonyms, so it
+  is a thesaurus too.
+- **Fully offline.** Ships gzipped (~12 MB) in assets, expanded once on first use to
+  ~30 MB in app storage. No network, no API key, no per-lookup cost.
+- **Handles spoken forms**: `mice → mouse`, `ran → run`, `happiest → happy`. Irregular
+  forms come from WordNet's own exception lists rather than guesswork, and carry their part
+  of speech so "ran" leads with the verb rather than the baseball noun.
+- Senses are returned in WordNet's frequency order, capped at three so a spoken answer
+  stays short.
+
+The model is instructed to read the definition as written and then explain it briefly in
+your language, so you always hear the real wording first.
+
+To regenerate the database (the committed asset is already built):
+
+```bash
+python3 tools/build_dictionary.py
+```
+
+WordNet is English only. Hindi and Gujarati word meanings would need a different source —
+IndoWordNet is research-licensed and Wiktionary extracts are much rougher — so that is not
+included rather than shipped in a state that would disappoint.
+
+The WordNet licence requires its notice to travel with the data; it is in
+`app/src/main/assets/WORDNET_LICENSE.txt`.
+
 ## Model selection
 
 Sarvam retires chat models fairly often, and every retirement breaks clients that pin a

@@ -56,6 +56,10 @@ class SarvamClient(private val apiKey: String) {
     @Volatile
     var locationSource: (suspend () -> Coordinates?)? = null
 
+    /** Looks a word up in the on-device dictionary; returns the matched form and its senses. */
+    @Volatile
+    var dictionarySource: (suspend (String) -> Pair<String?, List<Sense>>)? = null
+
     /** Explicit user choice from Settings. Blank or null means auto-resolve. */
     @Volatile
     var preferredChatModel: String? = null
@@ -84,6 +88,7 @@ class SarvamClient(private val apiKey: String) {
         const val TOOL_SEARCH = "web_search"
         const val TOOL_WEATHER = "get_weather"
         const val TOOL_RAIN_ROUTE = "rain_on_route"
+        const val TOOL_DEFINE = "define_word"
 
         /** How many times the model may search before it has to answer. */
         private const val MAX_TOOL_ROUNDS = 2
@@ -261,6 +266,23 @@ class SarvamClient(private val apiKey: String) {
                     }
                 }
 
+                TOOL_DEFINE -> {
+                    val word = arguments.stringOrNull("word")
+                    if (word == null) "No word was provided." else {
+                        onSearching(word)
+                        val lookup = dictionarySource?.invoke(word)
+                        if (lookup == null) {
+                            "The offline dictionary is unavailable on this device."
+                        } else {
+                            DictionaryFormatting.format(
+                                word = WordForms.normalise(word),
+                                senses = lookup.second,
+                                matchedForm = lookup.first,
+                            )
+                        }
+                    }
+                }
+
                 else -> "Unknown tool: $name"
             }
         }.getOrElse { "That lookup could not be completed: ${it.message}" }
@@ -340,6 +362,20 @@ class SarvamClient(private val apiKey: String) {
                         stringParam("City or place name in English. Omit for the user's location."),
                     ),
                     required = emptyList(),
+                ),
+            )
+            .put(
+                tool(
+                    name = TOOL_DEFINE,
+                    description = "Look up what an English word means in the offline dictionary. " +
+                        "ALWAYS use this when the user asks the meaning, definition or synonyms " +
+                        "of a word — never answer from memory, because inventing a definition is " +
+                        "worse than saying the word is not listed.",
+                    properties = JSONObject().put(
+                        "word",
+                        stringParam("The single English word to look up, without punctuation."),
+                    ),
+                    required = listOf("word"),
                 ),
             )
             .put(
