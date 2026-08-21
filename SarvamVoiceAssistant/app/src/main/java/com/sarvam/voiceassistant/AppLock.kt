@@ -1,6 +1,7 @@
 package com.sarvam.voiceassistant
 
 import android.os.Build
+import android.util.Log
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_WEAK
 import androidx.biometric.BiometricManager.Authenticators.DEVICE_CREDENTIAL
@@ -29,9 +30,19 @@ class AppLock(private val activity: FragmentActivity) {
             BIOMETRIC_WEAK
         }
 
-    /** False when the device has no enrolled fingerprint, face, PIN, pattern or password. */
-    fun isAvailable(): Boolean =
+    /**
+     * False when the device has no enrolled fingerprint, face, PIN, pattern or password.
+     *
+     * Guarded because `canAuthenticate` is documented to return a status code but is known
+     * to throw outright on some OEM builds. This is called while composing the settings
+     * screen, so an exception here would take the whole screen down.
+     */
+    fun isAvailable(): Boolean = runCatching {
         manager.canAuthenticate(authenticators) == BiometricManager.BIOMETRIC_SUCCESS
+    }.getOrElse {
+        Log.w(TAG, "Biometric availability check failed; treating the lock as unavailable", it)
+        false
+    }
 
     fun prompt(
         title: String,
@@ -63,6 +74,15 @@ class AppLock(private val activity: FragmentActivity) {
             },
         )
 
-        prompt.authenticate(info)
+        // Report a failure to show the prompt rather than crashing; the caller stays locked
+        // and can retry, which is the safe direction to fail in.
+        runCatching { prompt.authenticate(info) }.onFailure {
+            Log.w(TAG, "Could not show the unlock prompt", it)
+            onFailure("The unlock prompt could not be shown on this device.")
+        }
+    }
+
+    private companion object {
+        const val TAG = "AppLock"
     }
 }
