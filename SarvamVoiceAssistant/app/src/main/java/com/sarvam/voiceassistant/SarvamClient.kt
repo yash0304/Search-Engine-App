@@ -185,10 +185,19 @@ class SarvamClient(private val apiKey: String) {
     ): String = withContext(Dispatchers.IO) {
         // Build the turn without mutating history, so a failed call leaves no residue.
         val pending = JSONObject().put("role", "user").put("content", userText)
+
+        // Definition questions are answered from the dictionary by the app itself rather
+        // than left to tool choice. The model picked the live-weather tool when asked what
+        // the word "weather" means, and for common words it tends to answer from memory —
+        // both of which defeat the point of shipping a dictionary.
+        val definitionContext = definitionContextFor(userText, onSearching)
+
         val messages = JSONArray().apply {
             // Rebuilt each turn so the injected date never goes stale mid-session.
             put(JSONObject().put("role", "system").put("content", SystemPrompt.now()))
             history.takeLast(HISTORY_TURNS).forEach { put(it) }
+            // Immediately before the question, so it is the freshest instruction in context.
+            definitionContext?.let { put(JSONObject().put("role", "system").put("content", it)) }
             put(pending)
         }
 
@@ -220,6 +229,24 @@ class SarvamClient(private val apiKey: String) {
         }
 
         throw SarvamException("The assistant kept searching without answering. Try rephrasing.")
+    }
+
+    /**
+     * The dictionary entry for a definition question, or null when the question is not one
+     * or the dictionary is unavailable. A failed lookup degrades to normal tool behaviour.
+     */
+    private suspend fun definitionContextFor(userText: String, onSearching: (String) -> Unit): String? {
+        val word = DefinitionRequest.detect(userText) ?: return null
+        val lookup = dictionarySource ?: return null
+
+        onSearching(word)
+        val result = runCatching { lookup(word) }.getOrNull() ?: return null
+
+        return DictionaryFormatting.format(
+            word = WordForms.normalise(word),
+            senses = result.second,
+            matchedForm = result.first,
+        )
     }
 
     /** Runs one tool call and returns the `tool` role message carrying its output. */
@@ -356,7 +383,9 @@ class SarvamClient(private val apiKey: String) {
                     name = TOOL_WEATHER,
                     description = "Get live weather and whether it is raining at a place. Use this " +
                         "for any question about rain, temperature or conditions right now. Omit " +
-                        "'place' to mean where the user currently is.",
+                        "'place' to mean where the user currently is. Do NOT use this when the " +
+                        "user asks what the WORD \"weather\" means — that is a dictionary " +
+                        "question and belongs to " + TOOL_DEFINE + ".",
                     properties = JSONObject().put(
                         "place",
                         stringParam("City or place name in English. Omit for the user's location."),
