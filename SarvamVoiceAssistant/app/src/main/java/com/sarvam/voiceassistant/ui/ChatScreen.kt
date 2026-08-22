@@ -117,7 +117,10 @@ fun ChatScreen(viewModel: ChatViewModel) {
     if (showSettings) {
         // Re-check the model list each time Settings opens, so a newly added or retired
         // model shows up without restarting the app.
-        LaunchedEffect(Unit) { viewModel.refreshModels() }
+        LaunchedEffect(Unit) {
+            viewModel.refreshModels()
+            viewModel.refreshDictionaryStatus()
+        }
 
         SettingsDialog(
             hasSavedKey = state.hasApiKey,
@@ -130,6 +133,8 @@ fun ChatScreen(viewModel: ChatViewModel) {
             lockAvailable = lockAvailable,
             webSearchEnabled = state.webSearchEnabled,
             locationEnabled = state.locationEnabled,
+            dictionaryStatus = state.dictionaryStatus,
+            onRebuildDictionary = viewModel::rebuildDictionary,
             onSave = { key, speaker, model, lock, webSearch, useLocation ->
                 viewModel.saveApiKey(key) // Blank keeps the stored key.
                 viewModel.setSpeaker(speaker)

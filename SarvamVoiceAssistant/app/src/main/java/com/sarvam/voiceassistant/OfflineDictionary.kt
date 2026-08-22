@@ -32,6 +32,43 @@ class OfflineDictionary(private val context: Context) {
         const val ASSET = "dictionary.db.gz"
         const val FILENAME = "dictionary.db"
         const val MAX_SENSES = 8
+
+        /** The expanded database is about 30 MB; refuse early rather than fail part-written. */
+        const val REQUIRED_BYTES = 35_000_000L
+    }
+
+    /** What the dictionary can report about itself, for the Settings screen. */
+    sealed interface Status {
+        data class Ready(val senseCount: Int) : Status
+        data class Unavailable(val reason: String) : Status
+    }
+
+    /**
+     * Opens the dictionary if needed and reports what happened. Exists so the app can show
+     * the real reason on screen: a database that will not open is otherwise invisible, and
+     * was being reported to the user as "that word is not in the dictionary".
+     */
+    suspend fun status(): Status = withContext(Dispatchers.IO) {
+        val db = open()
+            ?: return@withContext Status.Unavailable(failureReason ?: "unknown error")
+
+        runCatching {
+            db.rawQuery("SELECT COUNT(*) FROM sense", null).use { cursor ->
+                cursor.moveToFirst()
+                Status.Ready(cursor.getInt(0))
+            }
+        }.getOrElse { Status.Unavailable(it.message ?: "query failed") }
+    }
+
+    /**
+     * Deletes the expanded database so the next lookup rebuilds it from the asset. For when
+     * the first expansion was interrupted or ran out of space.
+     */
+    suspend fun rebuild(): Status = withContext(Dispatchers.IO) {
+        close()
+        failureReason = null
+        runCatching { File(context.filesDir, FILENAME).delete() }
+        status()
     }
 
     /**
@@ -128,7 +165,12 @@ class OfflineDictionary(private val context: Context) {
     }
 
     private fun expand(destination: File) {
-        Log.i(TAG, "Expanding the dictionary from assets on first use")
+        val free = destination.parentFile?.usableSpace ?: 0L
+        Log.i(TAG, "Expanding the dictionary from assets; ${free / 1_000_000} MB free")
+        if (free in 1 until REQUIRED_BYTES) {
+            error("needs about ${REQUIRED_BYTES / 1_000_000} MB free, only ${free / 1_000_000} MB available")
+        }
+
         val temporary = File(destination.parentFile, "$FILENAME.tmp")
 
         context.assets.open(ASSET).use { asset ->

@@ -56,6 +56,8 @@ fun SettingsDialog(
     lockAvailable: Boolean,
     webSearchEnabled: Boolean,
     locationEnabled: Boolean,
+    dictionaryStatus: String,
+    onRebuildDictionary: () -> Unit,
     onSave: (apiKey: String, speaker: String, model: String, lock: Boolean, webSearch: Boolean, location: Boolean) -> Unit,
     onClearKey: () -> Unit,
     onDismiss: () -> Unit,
@@ -153,6 +155,20 @@ fun SettingsDialog(
                     enabled = true,
                     onCheckedChange = { useLocation = it },
                 )
+
+                Spacer(Modifier.height(20.dp))
+                Text("Offline dictionary", style = MaterialTheme.typography.titleSmall)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = dictionaryStatus,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                // "Unavailable" here is the honest answer when the database will not open,
+                // and is what should be reported rather than "that word does not exist".
+                if (!dictionaryStatus.startsWith("Ready")) {
+                    TextButton(onClick = onRebuildDictionary) { Text("Rebuild dictionary") }
+                }
 
                 Spacer(Modifier.height(20.dp))
                 SettingSection(

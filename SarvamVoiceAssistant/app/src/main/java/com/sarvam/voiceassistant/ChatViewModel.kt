@@ -45,6 +45,8 @@ data class UiState(
     val locationEnabled: Boolean = true,
     /** The query the model is currently looking up, for the status line. */
     val searchQuery: String? = null,
+    /** Human-readable state of the offline dictionary, shown in Settings. */
+    val dictionaryStatus: String = "Checking…",
 ) {
     val isBusy: Boolean get() = stage != Stage.IDLE
 }
@@ -131,6 +133,33 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun setLocationEnabled(enabled: Boolean) {
         store.locationEnabled = enabled
         _uiState.update { it.copy(locationEnabled = enabled) }
+    }
+
+    /** Reports whether the offline dictionary actually loaded, and why not if it did not. */
+    fun refreshDictionaryStatus() {
+        viewModelScope.launch {
+            val text = when (val status = dictionary.status()) {
+                is OfflineDictionary.Status.Ready ->
+                    "Ready — ${"%,d".format(status.senseCount)} entries"
+                is OfflineDictionary.Status.Unavailable ->
+                    "Unavailable — ${status.reason}"
+            }
+            _uiState.update { it.copy(dictionaryStatus = text) }
+        }
+    }
+
+    /** Deletes and re-expands the dictionary, for a first attempt that failed part-way. */
+    fun rebuildDictionary() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(dictionaryStatus = "Rebuilding…") }
+            val text = when (val status = dictionary.rebuild()) {
+                is OfflineDictionary.Status.Ready ->
+                    "Ready — ${"%,d".format(status.senseCount)} entries"
+                is OfflineDictionary.Status.Unavailable ->
+                    "Still unavailable — ${status.reason}"
+            }
+            _uiState.update { it.copy(dictionaryStatus = text) }
+        }
     }
 
     /** True when the OS has already granted a location permission. */
