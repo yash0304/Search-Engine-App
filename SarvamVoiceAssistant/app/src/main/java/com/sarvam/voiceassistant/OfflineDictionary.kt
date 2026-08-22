@@ -173,8 +173,21 @@ class OfflineDictionary(private val context: Context) {
 
         val temporary = File(destination.parentFile, "$FILENAME.tmp")
 
-        context.assets.open(ASSET).use { asset ->
-            GZIPInputStream(asset).use { input ->
+        // AssetManager throws FileNotFoundException whose message is only the file name,
+        // which tells the user nothing. Say what it actually means: the APK was built
+        // without the asset, so rebuilding the *database* can never help — the *app* needs
+        // rebuilding.
+        val asset = try {
+            context.assets.open(ASSET)
+        } catch (e: java.io.FileNotFoundException) {
+            error(
+                "the dictionary is missing from this build of the app. " +
+                    "Rebuild the app (Build > Clean Project, then Run), or install the APK from CI.",
+            )
+        }
+
+        asset.use { stream ->
+            GZIPInputStream(stream).use { input ->
                 temporary.outputStream().use { output -> input.copyTo(output) }
             }
         }
