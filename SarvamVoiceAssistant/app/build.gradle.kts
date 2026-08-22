@@ -74,6 +74,12 @@ dependencies {
 
     implementation(libs.androidx.security.crypto)
     implementation(libs.androidx.biometric)
+    // Pinned deliberately. biometric 1.1.0 pulls androidx.fragment 1.2.5, whose
+    // FragmentActivity packs a fragment index into the upper 16 bits of a request code and
+    // rejects anything larger. The modern ActivityResultRegistry hands it full-range random
+    // codes, so every runtime permission request crashed with
+    // "Can only use lower 16 bits for requestCode". Fragment 1.3.0 dropped that packing.
+    implementation(libs.androidx.fragment.ktx)
     implementation(libs.play.services.location)
     implementation(libs.okhttp)
 
