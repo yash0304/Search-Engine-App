@@ -174,16 +174,13 @@ class OfflineDictionary(private val context: Context) {
         val temporary = File(destination.parentFile, "$FILENAME.tmp")
 
         // AssetManager throws FileNotFoundException whose message is only the file name,
-        // which tells the user nothing. Say what it actually means: the APK was built
-        // without the asset, so rebuilding the *database* can never help — the *app* needs
-        // rebuilding.
+        // which tells the user nothing. Say what it actually means, and list what the APK
+        // does contain — "missing" alone cannot distinguish an asset that was never
+        // packaged from one packaged under a name this code is not asking for.
         val asset = try {
             context.assets.open(ASSET)
         } catch (e: java.io.FileNotFoundException) {
-            error(
-                "the dictionary is missing from this build of the app. " +
-                    "Rebuild the app (Build > Clean Project, then Run), or install the APK from CI.",
-            )
+            error("$ASSET is not in this build. Assets present: ${assetInventory()}")
         }
 
         asset.use { stream ->
@@ -198,6 +195,19 @@ class OfflineDictionary(private val context: Context) {
             temporary.delete()
             error("Could not move the expanded dictionary into place")
         }
+    }
+
+    /**
+     * Everything the packaged APK actually has in `assets/`, for the failure message. The
+     * root listing also contains directory names, so a nested asset still shows up as its
+     * folder rather than vanishing.
+     */
+    private fun assetInventory(): String {
+        val entries = runCatching { context.assets.list("")?.toList().orEmpty() }
+            .getOrElse { return "could not be listed (${it.message ?: it::class.java.simpleName})" }
+
+        if (entries.isEmpty()) return "none at all"
+        return entries.sorted().joinToString(", ")
     }
 
     fun close() {
