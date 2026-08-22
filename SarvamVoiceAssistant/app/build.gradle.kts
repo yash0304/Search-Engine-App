@@ -45,12 +45,6 @@ android {
         }
     }
 
-    androidResources {
-        // The dictionary asset is already gzipped; re-compressing it in the APK gains
-        // nothing and only slows the first-run expansion.
-        noCompress += "gz"
-    }
-
     testOptions {
         unitTests {
             // Lets unit tests call android.util.Base64 and friends without Robolectric.
