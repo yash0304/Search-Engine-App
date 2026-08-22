@@ -29,29 +29,62 @@ class WeatherService {
     private companion object {
         const val FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
         const val GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
+        const val NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
         const val CURRENT_FIELDS = "precipitation,weather_code,temperature_2m"
+
+        // Nominatim's usage policy requires an identifying User-Agent.
+        const val USER_AGENT = "SarvamVoiceAssistant/1.0 (Android; personal project)"
     }
 
-    /** Resolves a place name to coordinates. Null when the place is not recognised. */
+    /**
+     * Resolves a place name to coordinates. Null only when neither source recognises it.
+     *
+     * Open-Meteo's geocoder indexes populated places only, so it cannot find a neighbourhood
+     * or a planned sector — "Connaught Place" and "Noida Sector 126" both come back empty.
+     * OpenStreetMap does index those, so it is used as a fallback. Open-Meteo stays first
+     * because it is purpose-built for this and has no usage policy to respect.
+     */
     suspend fun geocode(place: String): GeocodedPlace? = withContext(Dispatchers.IO) {
         val trimmed = place.trim()
         if (trimmed.isEmpty()) return@withContext null
 
-        val url = "$GEOCODE_URL?name=${encode(trimmed)}&count=1&language=en&format=json"
-        val first = JSONObject(get(url)).optJSONArray("results")?.optJSONObject(0)
-            ?: return@withContext null
+        openMeteoGeocode(trimmed) ?: openStreetMapGeocode(trimmed)
+    }
+
+    private fun openMeteoGeocode(place: String): GeocodedPlace? {
+        val url = "$GEOCODE_URL?name=${encode(place)}&count=1&language=en&format=json"
+        val first = runCatching { JSONObject(get(url)).optJSONArray("results")?.optJSONObject(0) }
+            .getOrNull() ?: return null
 
         val latitude = first.optDouble("latitude", Double.NaN)
         val longitude = first.optDouble("longitude", Double.NaN)
-        if (latitude.isNaN() || longitude.isNaN()) return@withContext null
+        if (latitude.isNaN() || longitude.isNaN()) return null
 
         // Include the admin area so "Vadodara, Gujarat" is distinguishable from a namesake.
         val label = listOfNotNull(
             first.stringOrNullValue("name"),
             first.stringOrNullValue("admin1"),
-        ).joinToString(", ").ifBlank { trimmed }
+        ).joinToString(", ").ifBlank { place }
 
-        GeocodedPlace(label, Coordinates(latitude, longitude))
+        return GeocodedPlace(label, Coordinates(latitude, longitude))
+    }
+
+    /** Finds neighbourhoods, sectors and landmarks that the weather geocoder does not index. */
+    private fun openStreetMapGeocode(place: String): GeocodedPlace? {
+        val url = "$NOMINATIM_URL?q=${encode(place)}&format=jsonv2&limit=1&accept-language=en"
+        val first = runCatching { JSONArray(get(url)).optJSONObject(0) }.getOrNull() ?: return null
+
+        val latitude = first.stringOrNullValue("lat")?.toDoubleOrNull() ?: return null
+        val longitude = first.stringOrNullValue("lon")?.toDoubleOrNull() ?: return null
+
+        // display_name is the full postal-style string; the leading parts are the useful ones.
+        val label = first.stringOrNullValue("display_name")
+            ?.split(",")
+            ?.take(3)
+            ?.joinToString(",") { it.trim() }
+            ?: place
+
+        return GeocodedPlace(label, Coordinates(latitude, longitude))
     }
 
     /** Current conditions at one point, already phrased for the model. */
@@ -136,6 +169,7 @@ class WeatherService {
         val request = Request.Builder()
             .url(url)
             .addHeader("Accept", "application/json")
+            .addHeader("User-Agent", USER_AGENT)
             .get()
             .build()
 

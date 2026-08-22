@@ -106,23 +106,39 @@ class DictionaryFormattingTest {
 
     @Test
     fun `an absent word is reported, never invented`() {
-        val text = DictionaryFormatting.format("blorptastic", emptyList())
+        val text = DictionaryFormatting.format("blorptastic", DictionaryResult.NotFound)
         assertTrue(text.contains("not in the offline dictionary"))
         assertTrue("must forbid invention", text.contains("do not invent"))
     }
 
     @Test
+    fun `a broken dictionary does not masquerade as a missing word`() {
+        // The reported bug: the database failed to open and the app announced that
+        // "weather" was not in the dictionary. Those are different failures and the model
+        // must be told which one happened.
+        val text = DictionaryFormatting.format("weather", DictionaryResult.Unavailable("disk full"))
+        assertTrue(text.contains("could not be opened"))
+        assertTrue("should surface the reason", text.contains("disk full"))
+        assertFalse("must not claim the word is absent", text.contains("is not in the offline dictionary"))
+        assertTrue(text.contains("do not claim the word does not exist"))
+    }
+
+    @Test
+    fun `an unavailable dictionary still forbids inventing a meaning`() {
+        val text = DictionaryFormatting.format("weather", DictionaryResult.Unavailable("no such file"))
+        assertTrue(text.contains("do NOT invent"))
+    }
+
+    @Test
     fun `expands part of speech for speech`() {
-        val text = DictionaryFormatting.format("ephemeral", listOf(sense("adj", "lasting a short time")))
+        val text = DictionaryFormatting.format("ephemeral", DictionaryResult.Found("ephemeral", listOf(sense("adj", "lasting a short time"))))
         assertTrue(text.contains("adjective"))
         assertFalse("raw tags must not be spoken", text.contains("[adj]"))
     }
 
     @Test
     fun `includes definition and synonyms`() {
-        val text = DictionaryFormatting.format(
-            "ephemeral",
-            listOf(sense("adj", "lasting a very short time", listOf("passing", "transient"))),
+        val text = DictionaryFormatting.format("ephemeral", DictionaryResult.Found("ephemeral", listOf(sense("adj", "lasting a very short time", listOf("passing", "transient")))),
         )
         assertTrue(text.contains("lasting a very short time"))
         assertTrue(text.contains("passing"))
@@ -131,14 +147,14 @@ class DictionaryFormattingTest {
 
     @Test
     fun `instructs the model to read the definition as written`() {
-        val text = DictionaryFormatting.format("word", listOf(sense("n", "a unit of language")))
+        val text = DictionaryFormatting.format("word", DictionaryResult.Found("word", listOf(sense("n", "a unit of language"))))
         assertTrue(text.contains("Read the definition as written"))
     }
 
     @Test
     fun `caps senses so a spoken answer stays short`() {
         val many = (1..10).map { sense("n", "sense number $it") }
-        val text = DictionaryFormatting.format("run", many)
+        val text = DictionaryFormatting.format("run", DictionaryResult.Found("run", many))
         assertTrue(text.contains("sense number 3"))
         assertFalse(text.contains("sense number 4"))
         assertTrue("should say how many were omitted", text.contains("7 further senses"))
@@ -146,13 +162,13 @@ class DictionaryFormattingTest {
 
     @Test
     fun `notes when a different form was matched`() {
-        val text = DictionaryFormatting.format("ran", listOf(sense("v", "move fast")), matchedForm = "run")
+        val text = DictionaryFormatting.format("ran", DictionaryResult.Found("run", listOf(sense("v", "move fast"))))
         assertTrue(text.contains("found under \"run\""))
     }
 
     @Test
     fun `does not claim a different form when it matched exactly`() {
-        val text = DictionaryFormatting.format("run", listOf(sense("v", "move fast")), matchedForm = "run")
+        val text = DictionaryFormatting.format("run", DictionaryResult.Found("run", listOf(sense("v", "move fast"))))
         assertFalse(text.contains("found under"))
     }
 }

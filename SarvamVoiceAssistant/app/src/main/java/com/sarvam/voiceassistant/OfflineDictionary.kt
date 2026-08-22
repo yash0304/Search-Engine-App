@@ -23,6 +23,10 @@ class OfflineDictionary(private val context: Context) {
     @Volatile
     private var database: SQLiteDatabase? = null
 
+    /** Why the last open attempt failed, surfaced instead of pretending the word is absent. */
+    @Volatile
+    private var failureReason: String? = null
+
     private companion object {
         const val TAG = "OfflineDictionary"
         const val ASSET = "dictionary.db.gz"
@@ -34,28 +38,37 @@ class OfflineDictionary(private val context: Context) {
      * Looks a word up, trying its inflected form, then irregular bases from the database,
      * then regular suffix rules. Returns an empty list when the word genuinely is not there.
      */
-    suspend fun lookup(raw: String): Pair<String?, List<Sense>> = withContext(Dispatchers.IO) {
-        val db = open() ?: return@withContext null to emptyList()
+    suspend fun lookup(raw: String): DictionaryResult = withContext(Dispatchers.IO) {
+        val db = open()
+            ?: return@withContext DictionaryResult.Unavailable(failureReason ?: "unknown error")
+
         val candidates = WordForms.candidates(raw)
-        if (candidates.isEmpty()) return@withContext null to emptyList()
+        if (candidates.isEmpty()) return@withContext DictionaryResult.NotFound
 
-        // Exact form first — "saw" is a noun in its own right, not only the past of "see".
-        for (candidate in candidates) {
-            val senses = sensesFor(db, candidate)
-            if (senses.isNotEmpty()) return@withContext candidate to senses
-        }
-
-        // Irregular forms are stored explicitly rather than guessed, together with the part
-        // of speech — "ran" is a verb form, so the verb senses of "run" must lead rather
-        // than the baseball noun that happens to rank first overall.
-        for (candidate in candidates) {
-            for ((base, pos) in irregularBases(db, candidate)) {
-                val senses = sensesFor(db, base, preferredPos = pos)
-                if (senses.isNotEmpty()) return@withContext base to senses
+        try {
+            // Exact form first — "saw" is a noun in its own right, not only the past of "see".
+            for (candidate in candidates) {
+                val senses = sensesFor(db, candidate)
+                if (senses.isNotEmpty()) return@withContext DictionaryResult.Found(candidate, senses)
             }
+
+            // Irregular forms are stored explicitly rather than guessed, together with the
+            // part of speech — "ran" is a verb form, so the verb senses of "run" must lead
+            // rather than the baseball noun that happens to rank first overall.
+            for (candidate in candidates) {
+                for ((base, pos) in irregularBases(db, candidate)) {
+                    val senses = sensesFor(db, base, preferredPos = pos)
+                    if (senses.isNotEmpty()) return@withContext DictionaryResult.Found(base, senses)
+                }
+            }
+        } catch (e: Exception) {
+            // A query failure is not the same as the word being absent, and must not be
+            // reported as one.
+            Log.e(TAG, "Dictionary query failed", e)
+            return@withContext DictionaryResult.Unavailable(e.message ?: "query failed")
         }
 
-        null to emptyList()
+        DictionaryResult.NotFound
     }
 
     private fun sensesFor(db: SQLiteDatabase, word: String, preferredPos: String? = null): List<Sense> {
@@ -103,9 +116,14 @@ class OfflineDictionary(private val context: Context) {
                 if (!file.exists() || file.length() == 0L) expand(file)
 
                 SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READONLY)
-                    .also { database = it }
-            }.onFailure { Log.e(TAG, "Could not open the offline dictionary", it) }
-                .getOrNull()
+                    .also {
+                        database = it
+                        failureReason = null
+                    }
+            }.onFailure {
+                Log.e(TAG, "Could not open the offline dictionary", it)
+                failureReason = it.message ?: it::class.java.simpleName
+            }.getOrNull()
         }
     }
 

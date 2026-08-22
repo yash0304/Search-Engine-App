@@ -9,11 +9,27 @@ data class Sense(
 )
 
 /**
+ * The outcome of a lookup.
+ *
+ * [NotFound] and [Unavailable] must stay distinct. Collapsing them — as an earlier version
+ * did by returning an empty list for both — makes a broken dictionary claim that a perfectly
+ * ordinary word does not exist, which is worse than admitting the lookup failed.
+ */
+sealed interface DictionaryResult {
+    data class Found(val matchedForm: String, val senses: List<Sense>) : DictionaryResult
+
+    /** The dictionary opened and genuinely does not contain the word. */
+    data object NotFound : DictionaryResult
+
+    /** The dictionary could not be opened or read at all. */
+    data class Unavailable(val reason: String) : DictionaryResult
+}
+
+/**
  * Formats dictionary results for the model.
  *
- * The whole point of the offline dictionary is that the answer is looked up rather than
- * invented, so this hands over the real wording and states plainly when a word is absent.
- * "Not in the dictionary" is a correct answer, and the model must be able to give it.
+ * The point of the offline dictionary is that the answer is looked up rather than invented,
+ * so this hands over the real wording and is explicit about the two ways it can fail.
  *
  * Kept free of Android so it can be unit tested.
  */
@@ -42,21 +58,29 @@ object DictionaryFormatting {
         return (definition.ifBlank { gloss.trim() }) to examples
     }
 
-    fun format(word: String, senses: List<Sense>, matchedForm: String? = null): String {
-        if (senses.isEmpty()) {
-            return "\"$word\" is not in the offline dictionary. Say so plainly; do not invent " +
-                "a meaning. You may offer to search the web instead."
-        }
+    fun format(word: String, result: DictionaryResult): String = when (result) {
+        is DictionaryResult.Unavailable ->
+            "The offline dictionary could not be opened (${result.reason}). Tell the user the " +
+                "dictionary is unavailable on this device — do NOT invent a meaning, and do not " +
+                "claim the word does not exist. You may offer to search the web instead."
 
+        DictionaryResult.NotFound ->
+            "\"$word\" is not in the offline dictionary. Say so plainly; do not invent " +
+                "a meaning. You may offer to search the web instead."
+
+        is DictionaryResult.Found -> formatFound(word, result)
+    }
+
+    private fun formatFound(word: String, found: DictionaryResult.Found): String {
         val heading = buildString {
             append("Dictionary entry for \"$word\"")
-            if (matchedForm != null && !matchedForm.equals(word, ignoreCase = true)) {
-                append(" (found under \"$matchedForm\")")
+            if (!found.matchedForm.equals(word, ignoreCase = true)) {
+                append(" (found under \"${found.matchedForm}\")")
             }
             append(", from WordNet. Read the definition as written, then explain it briefly.")
         }
 
-        val body = senses.take(MAX_SENSES).mapIndexed { index, sense ->
+        val body = found.senses.take(MAX_SENSES).mapIndexed { index, sense ->
             buildString {
                 append("${index + 1}. [${partOfSpeechName(sense.partOfSpeech)}] ${sense.definition}")
                 if (sense.synonyms.isNotEmpty()) {
@@ -66,8 +90,8 @@ object DictionaryFormatting {
             }
         }
 
-        val more = (senses.size - MAX_SENSES).takeIf { it > 0 }
-            ?.let { "\n(${it} further sense${if (it == 1) "" else "s"} not shown.)" }
+        val more = (found.senses.size - MAX_SENSES).takeIf { it > 0 }
+            ?.let { "\n($it further sense${if (it == 1) "" else "s"} not shown.)" }
             .orEmpty()
 
         return "$heading\n" + body.joinToString("\n") + more

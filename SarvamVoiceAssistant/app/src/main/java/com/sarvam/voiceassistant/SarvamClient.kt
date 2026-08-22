@@ -58,7 +58,7 @@ class SarvamClient(private val apiKey: String) {
 
     /** Looks a word up in the on-device dictionary; returns the matched form and its senses. */
     @Volatile
-    var dictionarySource: (suspend (String) -> Pair<String?, List<Sense>>)? = null
+    var dictionarySource: (suspend (String) -> DictionaryResult)? = null
 
     /** Explicit user choice from Settings. Blank or null means auto-resolve. */
     @Volatile
@@ -240,13 +240,11 @@ class SarvamClient(private val apiKey: String) {
         val lookup = dictionarySource ?: return null
 
         onSearching(word)
-        val result = runCatching { lookup(word) }.getOrNull() ?: return null
+        val result = runCatching { lookup(word) }.getOrElse {
+            DictionaryResult.Unavailable(it.message ?: "lookup failed")
+        }
 
-        return DictionaryFormatting.format(
-            word = WordForms.normalise(word),
-            senses = result.second,
-            matchedForm = result.first,
-        )
+        return DictionaryFormatting.format(WordForms.normalise(word), result)
     }
 
     /** Runs one tool call and returns the `tool` role message carrying its output. */
@@ -298,15 +296,8 @@ class SarvamClient(private val apiKey: String) {
                     if (word == null) "No word was provided." else {
                         onSearching(word)
                         val lookup = dictionarySource?.invoke(word)
-                        if (lookup == null) {
-                            "The offline dictionary is unavailable on this device."
-                        } else {
-                            DictionaryFormatting.format(
-                                word = WordForms.normalise(word),
-                                senses = lookup.second,
-                                matchedForm = lookup.first,
-                            )
-                        }
+                            ?: DictionaryResult.Unavailable("no dictionary is configured")
+                        DictionaryFormatting.format(WordForms.normalise(word), lookup)
                     }
                 }
 
