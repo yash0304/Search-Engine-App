@@ -54,8 +54,9 @@ jobs:
       - name: Build debug APK
         run: ./gradlew --no-daemon assembleDebug
 
-      # The offline dictionary was reported missing at runtime from an APK that was clearly
-      # large enough to contain it. Assert it here so packaging is proved, not assumed.
+      # This caught a real bug: named dictionary.db.gz, the asset was inflated by the build
+      # and packaged as assets/dictionary.db, so the name the app opened was absent from the
+      # APK. Assert the exact packaged name, because that is what silently changed.
       - name: Verify the dictionary asset is packaged
         run: |
           set -euo pipefail
@@ -63,18 +64,18 @@ jobs:
 
           echo "Source asset:"
           ls -l app/src/main/assets/
-          sha256sum app/src/main/assets/dictionary.db.gz
+          sha256sum app/src/main/assets/dictionary.db.bin
 
           echo "APK:"
           ls -l "$apk"
 
           echo "Asset entries inside the APK:"
-          unzip -l "$apk" | grep -E ' assets/' || true
+          unzip -l "$apk" | grep -E ' assets/'
 
-          # -c prints to stdout; piping through gzip -t proves the packaged copy is intact
-          # and not merely present.
-          unzip -p "$apk" assets/dictionary.db.gz | gzip -t -
-          echo "Packaged dictionary.db.gz is present and is a valid gzip."
+          # -p writes to stdout; gzip -t then proves the packaged copy is intact rather
+          # than merely present under the right name.
+          unzip -p "$apk" assets/dictionary.db.bin | gzip -t -
+          echo "assets/dictionary.db.bin is packaged under its own name and is a valid gzip."
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

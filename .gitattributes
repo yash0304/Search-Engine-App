@@ -8,6 +8,7 @@
 * text=auto
 
 *.gz     binary
+*.bin    binary
 *.zip    binary
 *.jar    binary
 *.db     binary

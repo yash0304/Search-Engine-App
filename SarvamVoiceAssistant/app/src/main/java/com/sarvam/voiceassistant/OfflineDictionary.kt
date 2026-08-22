@@ -3,6 +3,7 @@ package com.sarvam.voiceassistant
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.util.Log
+import java.io.BufferedInputStream
 import java.io.File
 import java.util.zip.GZIPInputStream
 import kotlinx.coroutines.Dispatchers
@@ -17,6 +18,10 @@ import kotlinx.coroutines.withContext
  *
  * The database ships gzipped in assets (~12 MB) and is expanded once on first use to
  * ~30 MB in app storage, because SQLite cannot read a compressed asset directly.
+ *
+ * The asset is deliberately NOT named `.gz`: the Android build pipeline inflates a `.gz`
+ * asset and packages it under the name without that extension, so the file this code opened
+ * was genuinely absent from the APK while a 30 MB `assets/dictionary.db` sat next to it.
  */
 class OfflineDictionary(private val context: Context) {
 
@@ -29,7 +34,7 @@ class OfflineDictionary(private val context: Context) {
 
     private companion object {
         const val TAG = "OfflineDictionary"
-        const val ASSET = "dictionary.db.gz"
+        const val ASSET = "dictionary.db.bin"
         const val FILENAME = "dictionary.db"
         const val MAX_SENSES = 8
 
@@ -183,9 +188,14 @@ class OfflineDictionary(private val context: Context) {
             error("$ASSET is not in this build. Assets present: ${assetInventory()}")
         }
 
-        asset.use { stream ->
-            GZIPInputStream(stream).use { input ->
-                temporary.outputStream().use { output -> input.copyTo(output) }
+        // Whether to inflate is decided by the first two bytes, not by the file name. The
+        // build pipeline has already rewritten this asset once — inflating it and renaming
+        // it — and content is the only thing it cannot quietly change underneath us.
+        asset.use { raw ->
+            val buffered = BufferedInputStream(raw)
+            val input = if (looksGzipped(buffered)) GZIPInputStream(buffered) else buffered
+            input.use { source ->
+                temporary.outputStream().use { output -> source.copyTo(output) }
             }
         }
 
@@ -195,6 +205,15 @@ class OfflineDictionary(private val context: Context) {
             temporary.delete()
             error("Could not move the expanded dictionary into place")
         }
+    }
+
+    /** The gzip magic number, read without consuming it. */
+    private fun looksGzipped(stream: BufferedInputStream): Boolean {
+        stream.mark(2)
+        val first = stream.read()
+        val second = stream.read()
+        stream.reset()
+        return first == 0x1f && second == 0x8b
     }
 
     /**

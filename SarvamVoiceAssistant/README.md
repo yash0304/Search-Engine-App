@@ -109,8 +109,11 @@ word or it does not, and *"not in the dictionary"* is a correct answer.
 
 - **Princeton WordNet 3.1**: 147k words, 207k senses, definitions **and** synonyms, so it
   is a thesaurus too.
-- **Fully offline.** Ships gzipped (~12 MB) in assets, expanded once on first use to
-  ~30 MB in app storage. No network, no API key, no per-lookup cost.
+- **Fully offline.** Ships gzipped (~12 MB) as `assets/dictionary.db.bin`, expanded once on
+  first use to ~30 MB in app storage. No network, no API key, no per-lookup cost.
+  The `.bin` extension is load-bearing: the Android build pipeline inflates any asset named
+  `.gz` and packages it under the name without that extension, so a `dictionary.db.gz`
+  asset is simply not in the APK by that name. CI asserts the packaged entry name.
 - **Handles spoken forms**: `mice → mouse`, `ran → run`, `happiest → happy`. Irregular
   forms come from WordNet's own exception lists rather than guesswork, and carry their part
   of speech so "ran" leads with the verb rather than the baseball noun.

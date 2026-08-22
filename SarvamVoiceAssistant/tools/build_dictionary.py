@@ -9,7 +9,10 @@ answer that a model will rarely give you on its own.
 The WordNet data is pulled from Maven Central (the extjwnl packaging) rather than
 princeton.edu, because it is a stable, versioned artifact.
 
-Output: app/src/main/assets/dictionary.db.gz
+Output: app/src/main/assets/dictionary.db.bin — a gzipped SQLite database.
+
+The ".bin" matters. Name it ".gz" and the Android build pipeline inflates it and packages
+it as "dictionary.db", so the asset the app opens is not in the APK at all.
 
 Usage:
     python3 tools/build_dictionary.py
@@ -42,7 +45,7 @@ PARTS = {"noun": "n", "verb": "v", "adj": "adj", "adv": "adv"}
 EXCEPTION_FILES = {"noun.exc": "n", "verb.exc": "v", "adj.exc": "adj", "adv.exc": "adv"}
 
 ROOT = Path(__file__).resolve().parent.parent
-OUTPUT = ROOT / "app" / "src" / "main" / "assets" / "dictionary.db.gz"
+OUTPUT = ROOT / "app" / "src" / "main" / "assets" / "dictionary.db.bin"
 
 
 def fetch_wordnet(workdir: Path) -> Path:
