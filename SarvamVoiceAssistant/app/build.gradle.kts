@@ -14,6 +14,12 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "1.0"
+
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // Shown in Settings. An installed build that predated a fix looked identical to one
+        // that had it, which cost several rounds of "rebuild and try again".
+        buildConfigField("String", "GIT_COMMIT", "\"${gitCommit()}\"")
     }
 
     buildTypes {
@@ -37,6 +43,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     packaging {
@@ -79,5 +86,29 @@ dependencies {
 
     testImplementation(libs.junit)
 
+    androidTestImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.test.runner)
+
     debugImplementation(libs.androidx.ui.tooling)
 }
+
+/**
+ * The short commit this build came from, read from .git directly rather than by running
+ * git, which is often not on the PATH that Android Studio gives Gradle on Windows.
+ * Falls back to "unknown" rather than failing the build.
+ */
+fun gitCommit(): String = runCatching {
+    val gitDir = rootProject.projectDir.parentFile.resolve(".git")
+    val head = gitDir.resolve("HEAD").readText().trim()
+    val sha = if (head.startsWith("ref: ")) {
+        val ref = head.removePrefix("ref: ")
+        gitDir.resolve(ref).takeIf { it.isFile }?.readText()?.trim()
+            ?: gitDir.resolve("packed-refs").readLines()
+                .first { it.endsWith(" $ref") }
+                .substringBefore(' ')
+    } else {
+        head
+    }
+    sha.take(7)
+}.getOrDefault("unknown")

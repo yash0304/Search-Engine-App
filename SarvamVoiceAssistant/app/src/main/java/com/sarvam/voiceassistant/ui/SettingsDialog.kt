@@ -34,6 +34,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import com.sarvam.voiceassistant.BuildConfig
 import com.sarvam.voiceassistant.Voices
 
 private const val AUTOMATIC = ""
@@ -169,6 +170,12 @@ fun SettingsDialog(
                 if (!dictionaryStatus.startsWith("Ready")) {
                     TextButton(onClick = onRebuildDictionary) { Text("Rebuild dictionary") }
                 }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = "App build ${BuildConfig.GIT_COMMIT}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
 
                 Spacer(Modifier.height(20.dp))
                 SettingSection(
