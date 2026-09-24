@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -71,7 +73,11 @@ import com.sarvam.voiceassistant.Stage
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ChatScreen(viewModel: ChatViewModel) {
+fun ChatScreen(
+    viewModel: ChatViewModel,
+    /** Called just before opening the file picker, so the app lock does not fire. */
+    onOpeningOwnScreen: () -> Unit = {},
+) {
     val state by viewModel.uiState.collectAsState()
     val amplitude by viewModel.amplitude.collectAsState()
     val context = LocalContext.current
@@ -204,7 +210,10 @@ fun ChatScreen(viewModel: ChatViewModel) {
                     draft = ""
                 },
                 onMic = ::requestMic,
-                onAttach = { documentPicker.launch(arrayOf("application/pdf", "image/*")) },
+                onAttach = {
+                    onOpeningOwnScreen()
+                    documentPicker.launch(arrayOf("application/pdf", "image/*"))
+                },
             )
         },
     ) { padding ->
@@ -339,7 +348,15 @@ private fun InputBar(
     onMic: () -> Unit,
     onAttach: () -> Unit,
 ) {
-    Surface(tonalElevation = 3.dp) {
+    // The app draws edge to edge, so Android no longer shrinks the window for the keyboard;
+    // without these the keyboard covered the text field. navigationBars keeps the bar clear
+    // of the gesture area when the keyboard is closed.
+    Surface(
+        tonalElevation = 3.dp,
+        modifier = Modifier
+            .navigationBarsPadding()
+            .imePadding(),
+    ) {
         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
 
             StatusLine(stage, searchQuery)

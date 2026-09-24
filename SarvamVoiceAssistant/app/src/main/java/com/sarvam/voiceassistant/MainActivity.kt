@@ -29,6 +29,13 @@ class MainActivity : FragmentActivity() {
     private var lockMessage by mutableStateOf<String?>(null)
     private var promptVisible = false
 
+    /**
+     * Set just before the app opens one of its own screens, such as the file picker. That
+     * stops this activity like leaving the app does, and locking there removed the chat screen
+     * while the picker was open — so the picked document had nowhere to return to and was lost.
+     */
+    private var openingOwnScreen = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
@@ -45,7 +52,10 @@ class MainActivity : FragmentActivity() {
                     if (locked) {
                         LockScreen(message = lockMessage, onUnlock = ::promptUnlock)
                     } else {
-                        ChatScreen(viewModel = viewModel)
+                        ChatScreen(
+                            viewModel = viewModel,
+                            onOpeningOwnScreen = { openingOwnScreen = true },
+                        )
                     }
                 }
             }
@@ -57,6 +67,7 @@ class MainActivity : FragmentActivity() {
 
     override fun onStart() {
         super.onStart()
+        openingOwnScreen = false
         if (locked && !promptVisible) promptUnlock()
     }
 
@@ -83,6 +94,8 @@ class MainActivity : FragmentActivity() {
         // A rotation also stops the activity. Cancelling there would kill an in-flight reply
         // and re-prompt for the lock, so treat a configuration change as staying in the app.
         if (isChangingConfigurations) return
+        // The user is still in the app, just on a picker it opened.
+        if (openingOwnScreen) return
 
         viewModel.cancelPipeline()
         if (shouldLock()) {
