@@ -91,6 +91,10 @@ dependencies {
     androidTestImplementation(libs.junit)
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.test.runner)
+    // Renders screens on the emulator for ScreenshotTest; versions come from the Compose BOM.
+    androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation(libs.androidx.ui.test.junit4)
+    debugImplementation(libs.androidx.ui.test.manifest)
 
     debugImplementation(libs.androidx.ui.tooling)
 }

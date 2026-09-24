@@ -5,6 +5,9 @@ import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,53 +22,58 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.automirrored.filled.MenuBook
-import androidx.compose.material.icons.filled.Description
-import androidx.compose.material.icons.filled.Newspaper
-import androidx.compose.material.icons.filled.Translate
-import androidx.compose.material.icons.filled.WaterDrop
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Newspaper
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Translate
+import androidx.compose.material.icons.filled.WaterDrop
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -78,6 +86,7 @@ import com.sarvam.voiceassistant.LocationProvider
 import com.sarvam.voiceassistant.Message
 import com.sarvam.voiceassistant.Role
 import com.sarvam.voiceassistant.Stage
+import com.sarvam.voiceassistant.UiState
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -190,18 +199,74 @@ fun ChatScreen(
         )
     }
 
+    ChatContent(
+        state = state,
+        amplitude = amplitude,
+        draft = draft,
+        onDraftChange = { draft = it },
+        onSend = {
+            val language = Language.spokenOrDefault(state.inputLanguage)
+            viewModel.sendText(draft, language)
+            draft = ""
+        },
+        onMic = ::requestMic,
+        onAttach = ::openDocumentPicker,
+        onLanguageChange = viewModel::setInputLanguage,
+        onAsk = { prompt -> viewModel.sendText(prompt, "en-IN") },
+        onOpenSettings = { showSettings = true },
+        onClearConversation = viewModel::clearConversation,
+        snackbarHostState = snackbarHostState,
+    )
+}
+
+/**
+ * Everything the chat screen draws, driven only by [state]. Kept free of the ViewModel so the
+ * screenshot test can render every screen state with sample data.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun ChatContent(
+    state: UiState,
+    amplitude: Float,
+    draft: String,
+    onDraftChange: (String) -> Unit,
+    onSend: () -> Unit,
+    onMic: () -> Unit,
+    onAttach: () -> Unit,
+    onLanguageChange: (String) -> Unit,
+    onAsk: (String) -> Unit,
+    onOpenSettings: () -> Unit,
+    onClearConversation: () -> Unit,
+    snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
+    animateGreeting: Boolean = true,
+) {
+    val conversation = state.messages.isNotEmpty()
+
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            TopAppBar(
-                title = { Text(if (state.messages.isEmpty()) "" else "Boliyan") },
+            CenterAlignedTopAppBar(
+                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                ),
+                navigationIcon = {
+                    if (conversation) {
+                        Monogram(size = 32.dp, modifier = Modifier.padding(start = 12.dp))
+                    }
+                },
+                title = {
+                    if (conversation) {
+                        Text("Boliyan", style = MaterialTheme.typography.titleLarge)
+                    }
+                },
                 actions = {
-                    if (state.messages.isNotEmpty()) {
-                        IconButton(onClick = viewModel::clearConversation) {
+                    if (conversation) {
+                        IconButton(onClick = onClearConversation) {
                             Icon(Icons.Filled.Delete, contentDescription = "Clear conversation")
                         }
                     }
-                    IconButton(onClick = { showSettings = true }) {
+                    IconButton(onClick = onOpenSettings) {
                         Icon(Icons.Filled.Settings, contentDescription = "Settings")
                     }
                 },
@@ -210,20 +275,16 @@ fun ChatScreen(
         bottomBar = {
             InputBar(
                 draft = draft,
-                onDraftChange = { draft = it },
+                onDraftChange = onDraftChange,
                 selectedLanguage = state.inputLanguage,
-                onLanguageChange = viewModel::setInputLanguage,
+                onLanguageChange = onLanguageChange,
                 stage = state.stage,
                 searchQuery = state.searchQuery,
                 amplitude = amplitude,
                 enabled = state.hasApiKey,
-                onSend = {
-                    val language = Language.spokenOrDefault(state.inputLanguage)
-                    viewModel.sendText(draft, language)
-                    draft = ""
-                },
-                onMic = ::requestMic,
-                onAttach = ::openDocumentPicker,
+                onSend = onSend,
+                onMic = onMic,
+                onAttach = onAttach,
             )
         },
     ) { padding ->
@@ -232,20 +293,191 @@ fun ChatScreen(
                 .fillMaxSize()
                 .padding(padding),
         ) {
-            if (state.messages.isEmpty()) {
+            if (conversation) {
+                ConversationList(state.messages)
+            } else {
                 WelcomeScreen(
                     hasApiKey = state.hasApiKey,
                     busy = state.isBusy,
-                    onOpenSettings = { showSettings = true },
-                    onAsk = { prompt -> viewModel.sendText(prompt, "en-IN") },
-                    onReadDocument = ::openDocumentPicker,
+                    onOpenSettings = onOpenSettings,
+                    onAsk = onAsk,
+                    onReadDocument = onAttach,
+                    animateGreeting = animateGreeting,
                 )
-            } else {
-                ConversationList(state.messages)
             }
         }
     }
 }
+
+// ── Welcome ─────────────────────────────────────────────────────────────
+
+/** One thing the app can do, shown on the welcome screen as a tappable example. */
+private data class Example(val icon: ImageVector, val title: String, val prompt: String)
+
+private val examples = listOf(
+    Example(Icons.Filled.WaterDrop, "Rain on your route", "Is it raining on the way to Vadodara?"),
+    Example(Icons.Filled.Translate, "Translate anything", "How do you say good morning in Gujarati?"),
+    Example(Icons.AutoMirrored.Filled.MenuBook, "Offline dictionary", "What is the meaning of ephemeral?"),
+    Example(Icons.Filled.Newspaper, "Facts from the web", "Who won the latest cricket World Cup?"),
+)
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun WelcomeScreen(
+    hasApiKey: Boolean,
+    busy: Boolean,
+    onOpenSettings: () -> Unit,
+    onAsk: (String) -> Unit,
+    onReadDocument: () -> Unit,
+    animateGreeting: Boolean,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Spacer(Modifier.height(8.dp))
+        CyclingGreeting(animate = animateGreeting)
+        Spacer(Modifier.height(20.dp))
+        Waveform(
+            modifier = Modifier
+                .fillMaxWidth(0.7f)
+                .height(36.dp),
+        )
+        Spacer(Modifier.height(20.dp))
+        Text(
+            text = "Boliyan",
+            style = MaterialTheme.typography.headlineMedium,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        Text(
+            text = "Speak in any Indian language. It answers out loud, in yours.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(top = 4.dp, bottom = 24.dp),
+        )
+
+        if (!hasApiKey) {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(Modifier.padding(20.dp)) {
+                    Text("One step first", style = overline)
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "Add your Sarvam API key. It is stored encrypted and never shown again.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    )
+                    TextButton(onClick = onOpenSettings, contentPadding = PaddingValues(0.dp)) {
+                        Text("Open Settings")
+                    }
+                }
+            }
+            return@Column
+        }
+
+        Text("TRY ONE", style = overline, modifier = Modifier.fillMaxWidth())
+        Spacer(Modifier.height(10.dp))
+
+        examples.chunked(2).forEachIndexed { row, pair ->
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                pair.forEachIndexed { column, example ->
+                    ExampleTile(
+                        example = example,
+                        accent = BoliyanColors.accents[(row * 2 + column) % BoliyanColors.accents.size],
+                        enabled = !busy,
+                        onClick = { onAsk(example.prompt) },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+        }
+
+        // The document reader is the one example that is an action, not a question, so it
+        // gets the ink card that reads as a button.
+        Card(
+            onClick = onReadDocument,
+            enabled = !busy,
+            colors = CardDefaults.cardColors(
+                containerColor = BoliyanColors.Ink,
+                contentColor = Color.White,
+                disabledContainerColor = BoliyanColors.Ink.copy(alpha = 0.5f),
+            ),
+            shape = MaterialTheme.shapes.large,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 18.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .size(44.dp)
+                        .background(BoliyanColors.Marigold, CircleShape),
+                ) {
+                    Icon(Icons.Filled.Description, contentDescription = null, tint = BoliyanColors.Ink)
+                }
+                Spacer(Modifier.width(16.dp))
+                Column {
+                    Text("Read a photo or PDF", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Receipts, letters, notices — then ask about it",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.White.copy(alpha = 0.75f),
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ExampleTile(
+    example: Example,
+    accent: Color,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Card(
+        onClick = onClick,
+        enabled = enabled,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+        shape = MaterialTheme.shapes.large,
+        modifier = modifier.height(148.dp),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .size(36.dp)
+                    .background(accent.copy(alpha = 0.18f), CircleShape),
+            ) {
+                Icon(example.icon, contentDescription = null, tint = accent, modifier = Modifier.size(20.dp))
+            }
+            Spacer(Modifier.height(12.dp))
+            Text(example.title, style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "“${example.prompt}”",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 3,
+            )
+        }
+    }
+}
+
+// ── Conversation ────────────────────────────────────────────────────────
 
 @Composable
 private fun ConversationList(messages: List<Message>) {
@@ -258,8 +490,8 @@ private fun ConversationList(messages: List<Message>) {
     LazyColumn(
         state = listState,
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         items(messages, key = { it.id }) { message -> MessageBubble(message) }
     }
@@ -268,151 +500,55 @@ private fun ConversationList(messages: List<Message>) {
 @Composable
 private fun MessageBubble(message: Message) {
     val fromUser = message.role == Role.USER
-    val bubbleColor = if (fromUser) {
-        MaterialTheme.colorScheme.primaryContainer
-    } else {
-        MaterialTheme.colorScheme.surfaceVariant
-    }
-    val textColor = if (fromUser) {
-        MaterialTheme.colorScheme.onPrimaryContainer
-    } else {
-        MaterialTheme.colorScheme.onSurfaceVariant
-    }
 
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = if (fromUser) Arrangement.End else Arrangement.Start,
+        verticalAlignment = Alignment.Bottom,
     ) {
-        Card(
-            colors = CardDefaults.cardColors(containerColor = bubbleColor),
-            modifier = Modifier.fillMaxWidth(0.85f),
-        ) {
-            Column(modifier = Modifier.padding(12.dp)) {
-                Text(
-                    text = if (fromUser) "You" else "Assistant",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = textColor.copy(alpha = 0.7f),
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(text = message.text, color = textColor, style = MaterialTheme.typography.bodyLarge)
-                message.languageCode?.let { code ->
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = code,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = textColor.copy(alpha = 0.55f),
-                    )
-                }
-            }
-        }
-    }
-}
-
-/** One thing the app can do, shown on the welcome screen as a tappable example. */
-private data class Example(val icon: ImageVector, val title: String, val prompt: String?)
-
-private val examples = listOf(
-    Example(Icons.Filled.WaterDrop, "Rain on your route", "Is it raining on the way to Vadodara?"),
-    Example(Icons.Filled.Translate, "Translate anything", "How do you say good morning in Gujarati?"),
-    Example(Icons.AutoMirrored.Filled.MenuBook, "Offline dictionary", "What is the meaning of ephemeral?"),
-    Example(Icons.Filled.Newspaper, "Latest facts from the web", "Who won the most recent cricket World Cup?"),
-    // No prompt: this one opens the file picker.
-    Example(Icons.Filled.Description, "Read a photo or PDF", null),
-)
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun WelcomeScreen(
-    hasApiKey: Boolean,
-    busy: Boolean,
-    onOpenSettings: () -> Unit,
-    onAsk: (String) -> Unit,
-    onReadDocument: () -> Unit,
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 24.dp, vertical = 16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Spacer(Modifier.height(24.dp))
-        Surface(
-            shape = CircleShape,
-            color = MaterialTheme.colorScheme.primaryContainer,
-            modifier = Modifier.size(88.dp),
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    Icons.Filled.Mic,
-                    contentDescription = null,
-                    modifier = Modifier.size(44.dp),
-                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                )
-            }
-        }
-        Spacer(Modifier.height(16.dp))
-        Text("Boliyan", style = MaterialTheme.typography.displaySmall)
-        Text(
-            text = "बोलियाँ · બોલીઓ · every Indian tongue",
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.primary,
-        )
-        Spacer(Modifier.height(12.dp))
-
-        if (!hasApiKey) {
-            Text(
-                text = "Add your Sarvam API key to get started.",
-                style = MaterialTheme.typography.bodyLarge,
-                textAlign = TextAlign.Center,
-            )
-            Spacer(Modifier.height(8.dp))
-            TextButton(onClick = onOpenSettings) { Text("Open Settings") }
-            return@Column
+        if (!fromUser) {
+            Monogram(size = 30.dp)
+            Spacer(Modifier.width(8.dp))
         }
 
-        Text(
-            text = "Tap the microphone and talk in Gujarati, Hindi, English or any Indian " +
-                "language. It answers out loud, in the language you used.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-        )
-        Spacer(Modifier.height(24.dp))
-        Text(
-            text = "Try one",
-            style = MaterialTheme.typography.labelLarge,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Spacer(Modifier.height(8.dp))
-
-        examples.forEach { example ->
-            Card(
-                onClick = { example.prompt?.let(onAsk) ?: onReadDocument() },
-                enabled = !busy,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 4.dp),
+        Column(horizontalAlignment = if (fromUser) Alignment.End else Alignment.Start) {
+            Surface(
+                // The tail corner points at whoever spoke.
+                shape = if (fromUser) {
+                    RoundedCornerShape(22.dp, 22.dp, 6.dp, 22.dp)
+                } else {
+                    RoundedCornerShape(22.dp, 22.dp, 22.dp, 6.dp)
+                },
+                color = if (fromUser) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh,
+                contentColor = if (fromUser) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.widthIn(max = 300.dp),
             ) {
-                Row(
+                Text(
+                    text = message.text,
+                    style = MaterialTheme.typography.bodyLarge,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(example.icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                    Spacer(Modifier.width(16.dp))
-                    Column {
-                        Text(example.title, style = MaterialTheme.typography.titleSmall)
-                        Text(
-                            text = example.prompt?.let { "\u201C$it\u201D" } ?: "Receipts, letters, notices, forms",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
+                )
+            }
+            message.languageCode?.let { code ->
+                Text(
+                    text = languageLabel(code),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                )
             }
         }
     }
 }
+
+/** "gu-IN" → "ગુજરાતી · GU": the language in its own script is friendlier than a code. */
+private fun languageLabel(code: String): String {
+    val native = Language.entries.firstOrNull { it.code == code }?.nativeLabel
+    val short = code.substringBefore('-').uppercase()
+    return if (native != null && native != short) "$native · $short" else short
+}
+
+// ── Input ───────────────────────────────────────────────────────────────
 
 @Composable
 private fun InputBar(
@@ -432,14 +568,15 @@ private fun InputBar(
     // without these the keyboard covered the text field. navigationBars keeps the bar clear
     // of the gesture area when the keyboard is closed.
     Surface(
-        tonalElevation = 3.dp,
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
         modifier = Modifier
             .navigationBarsPadding()
             .imePadding(),
     ) {
-        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+        Column(modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 10.dp)) {
 
-            StatusLine(stage, searchQuery)
+            StatusLine(stage, searchQuery, amplitude)
 
             Row(
                 modifier = Modifier
@@ -452,6 +589,11 @@ private fun InputBar(
                         selected = selectedLanguage == language.code,
                         onClick = { onLanguageChange(language.code) },
                         label = { Text(language.nativeLabel) },
+                        shape = CircleShape,
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                            selectedLabelColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                        ),
                     )
                 }
             }
@@ -467,21 +609,32 @@ private fun InputBar(
                     value = draft,
                     onValueChange = onDraftChange,
                     modifier = Modifier.weight(1f),
-                    placeholder = { Text("Type a message…") },
+                    placeholder = { Text("Type, or tap the mic…") },
                     enabled = enabled && stage == Stage.IDLE,
                     maxLines = 4,
+                    shape = RoundedCornerShape(28.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+                        focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+                        disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
+                    ),
+                    trailingIcon = if (draft.isNotBlank()) {
+                        {
+                            IconButton(onClick = onSend, enabled = enabled && stage == Stage.IDLE) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.Send,
+                                    contentDescription = "Send",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                        }
+                    } else {
+                        null
+                    },
                 )
 
-                Spacer(Modifier.width(8.dp))
-
-                IconButton(
-                    onClick = onSend,
-                    enabled = enabled && stage == Stage.IDLE && draft.isNotBlank(),
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
-                }
-
-                Spacer(Modifier.width(4.dp))
+                Spacer(Modifier.width(10.dp))
 
                 MicButton(stage = stage, amplitude = amplitude, enabled = enabled, onClick = onMic)
             }
@@ -490,54 +643,73 @@ private fun InputBar(
 }
 
 @Composable
-private fun StatusLine(stage: Stage, searchQuery: String?) {
+private fun StatusLine(stage: Stage, searchQuery: String?, amplitude: Float) {
     val label = when (stage) {
         Stage.IDLE -> null
         Stage.RECORDING -> "Listening…"
-        Stage.TRANSCRIBING -> "Transcribing…"
+        Stage.TRANSCRIBING -> "Understanding…"
         Stage.THINKING -> "Thinking…"
         Stage.SEARCHING -> searchQuery?.let { "Looking up $it…" } ?: "Looking it up…"
         Stage.SPEAKING -> "Speaking…"
         Stage.READING -> searchQuery?.let { "$it…" } ?: "Reading the document…"
-    }
+    } ?: return
 
-    if (label != null) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
-            Spacer(Modifier.width(8.dp))
-            Text(text = label, style = MaterialTheme.typography.labelMedium)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 8.dp, end = 8.dp, bottom = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (stage == Stage.RECORDING) {
+            // While you talk, the brand waveform moves with your voice.
+            Waveform(
+                level = amplitude,
+                bars = 18,
+                modifier = Modifier
+                    .width(96.dp)
+                    .height(22.dp),
+            )
+        } else {
+            CircularProgressIndicator(
+                modifier = Modifier.size(16.dp),
+                strokeWidth = 2.dp,
+                color = MaterialTheme.colorScheme.secondary,
+            )
         }
+        Spacer(Modifier.width(10.dp))
+        Text(text = label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
 @Composable
 private fun MicButton(stage: Stage, amplitude: Float, enabled: Boolean, onClick: () -> Unit) {
     val recording = stage == Stage.RECORDING
-    // Pulse the button with the live microphone level so it's obvious recording is working.
-    val scale by animateFloatAsState(
-        targetValue = if (recording) 1f + amplitude * 0.25f else 1f,
-        label = "micScale",
+    // A halo that swells with the microphone level, so it is obvious it is hearing you.
+    val halo by animateFloatAsState(
+        targetValue = if (recording) 1.15f + amplitude * 0.45f else 1f,
+        label = "micHalo",
     )
+    val fill = if (recording) BoliyanColors.Vermilion else BoliyanColors.Marigold
+    val haloColor = fill.copy(alpha = 0.28f)
 
-    val container = if (recording) {
-        MaterialTheme.colorScheme.errorContainer
-    } else {
-        MaterialTheme.colorScheme.primaryContainer
-    }
-
-    FloatingActionButton(
-        onClick = { if (enabled) onClick() },
-        containerColor = container,
-        modifier = Modifier.graphicsLayer(scaleX = scale, scaleY = scale),
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier
+            .size(58.dp)
+            .drawBehind {
+                if (recording) drawCircle(haloColor, radius = size.minDimension / 2 * halo)
+            }
+            .clip(CircleShape)
+            .background(if (enabled) fill else fill.copy(alpha = 0.4f))
+            .border(2.dp, Color.White.copy(alpha = 0.35f), CircleShape),
     ) {
-        Icon(
-            imageVector = if (recording) Icons.Filled.Stop else Icons.Filled.Mic,
-            contentDescription = if (recording) "Stop recording" else "Start recording",
-        )
+        IconButton(onClick = { if (enabled) onClick() }, modifier = Modifier.fillMaxSize()) {
+            Icon(
+                imageVector = if (recording) Icons.Filled.Stop else Icons.Filled.Mic,
+                contentDescription = if (recording) "Stop recording" else "Start recording",
+                tint = if (recording) Color.White else BoliyanColors.Ink,
+                modifier = Modifier.size(28.dp),
+            )
+        }
     }
 }

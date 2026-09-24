@@ -6,10 +6,12 @@ on:
     paths:
       - "SarvamVoiceAssistant/**"
       - ".github/workflows/android-apk.yml"
+      - ".github/scripts/**"
   pull_request:
     paths:
       - "SarvamVoiceAssistant/**"
       - ".github/workflows/android-apk.yml"
+      - ".github/scripts/**"
   workflow_dispatch:
 
 jobs:
@@ -129,14 +131,27 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Run dictionary tests on an emulator
+      # Runs the device tests, then pulls the screens ScreenshotTest rendered. The app is
+      # left installed after the run so its cache — where the images are — can be read.
+      - name: Run device tests and capture screens on an emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
           arch: x86_64
+          profile: pixel_6
           disable-animations: true
           working-directory: SarvamVoiceAssistant
-          script: ./gradlew --no-daemon connectedDebugAndroidTest
+          script: |
+            ./gradlew --no-daemon connectedDebugAndroidTest -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true
+            bash ../.github/scripts/print-screenshots.sh
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: SarvamVoiceAssistant/screenshots
+          if-no-files-found: ignore
 
       - name: Upload device test report
         if: always()

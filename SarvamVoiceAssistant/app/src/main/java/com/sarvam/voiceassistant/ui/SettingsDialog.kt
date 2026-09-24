@@ -93,10 +93,10 @@ fun SettingsDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Settings") },
+        title = { Text("Settings", style = MaterialTheme.typography.headlineSmall) },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                Text("API key", style = MaterialTheme.typography.titleSmall)
+                Text("API KEY", style = overline)
                 Spacer(Modifier.height(4.dp))
                 Text(
                     text = if (hasSavedKey) {
@@ -178,7 +178,7 @@ fun SettingsDialog(
                 )
 
                 Spacer(Modifier.height(20.dp))
-                Text("Speech", style = MaterialTheme.typography.titleSmall)
+                Text("SPEECH", style = overline)
                 Spacer(Modifier.height(8.dp))
                 ToggleRow(
                     title = "Streaming speech",
@@ -221,7 +221,7 @@ fun SettingsDialog(
                 )
 
                 Spacer(Modifier.height(20.dp))
-                Text("Offline dictionary", style = MaterialTheme.typography.titleSmall)
+                Text("OFFLINE DICTIONARY", style = overline)
                 Spacer(Modifier.height(4.dp))
                 Text(
                     text = dictionaryStatus,
