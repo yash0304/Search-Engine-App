@@ -1,0 +1,29 @@
+# Normalise line endings for text, and never touch binaries.
+#
+# Without this, git relies on content sniffing to decide what is text. That is usually
+# right, but a mangled byte in the dictionary asset or the Gradle wrapper only shows up as
+# a baffling runtime failure on the machine that checked it out — and never in CI, which
+# runs on Linux where no conversion happens.
+
+* text=auto
+
+*.gz     binary
+*.bin    binary
+*.zip    binary
+*.jar    binary
+*.db     binary
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.webp   binary
+*.ttf    binary
+*.otf    binary
+*.wav    binary
+*.mp3    binary
+*.apk    binary
+*.keystore binary
+
+# Shell scripts must keep LF or they will not run.
+gradlew  text eol=lf
+*.sh     text eol=lf
+*.bat    text eol=crlf

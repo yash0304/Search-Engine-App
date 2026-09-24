@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      MainActivity is a ComponentActivity hosting Compose, so this only styles the window
+      before the first frame. It deliberately does NOT need to be a Theme.AppCompat
+      descendant — all in-app colour comes from MaterialTheme in Theme.kt.
+    -->
+    <style name="Theme.SarvamVoiceAssistant" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@android:color/white</item>
+    </style>
+</resources>
