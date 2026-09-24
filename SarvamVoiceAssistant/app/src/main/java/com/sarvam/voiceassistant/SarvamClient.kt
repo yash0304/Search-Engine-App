@@ -404,9 +404,10 @@ class SarvamClient(private val apiKey: String) {
                 tool(
                     name = TOOL_SEARCH,
                     description = "Look up current information on the web. Use this for anything " +
-                        "that happened recently, for facts that change over time, or when you are " +
-                        "unsure whether your knowledge is current. Do NOT use it for greetings, " +
-                        "chit-chat, opinions, translation, arithmetic, or weather.",
+                        "that happened recently, for facts that change over time, or whenever you " +
+                        "would otherwise say you do not know — search instead of offering to. Do " +
+                        "NOT use it for greetings, chit-chat, opinions, translation, arithmetic, " +
+                        "weather, or general knowledge you already have.",
                     properties = JSONObject().put(
                         "query",
                         stringParam("Search keywords, in English, for the fact to look up."),
@@ -715,8 +716,13 @@ class SarvamClient(private val apiKey: String) {
             val cut = if (kept.length < text.length) "\n[…the rest of this document was cut to fit]" else ""
             "=== Document: $name ===\n$kept$cut"
         }
+        // Scoped on purpose: an unscoped "answer from this text" made the model refuse
+        // ordinary questions ("I don't have details on vermicelli in my resources") for as
+        // long as any document stayed in the chat.
         return "The user has shared these documents, read by Sarvam Document Intelligence. " +
-            "Answer questions about them from this text and say so when the answer is not in it.\n\n" +
+            "When a question is about one of them, answer from its text and say so if the " +
+            "answer is not there. For any other question, ignore these documents and answer " +
+            "normally.\n\n" +
             parts.joinToString("\n\n")
     }
 

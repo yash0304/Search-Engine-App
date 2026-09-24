@@ -22,6 +22,21 @@ class SystemPromptTest {
     }
 
     @Test
+    fun `answers everyday knowledge instead of refusing`() {
+        // It once answered "tell me more about vermicelli pasta" with "I don't have specific
+        // details in my resources", then offered to search instead of searching.
+        val prompt = SystemPrompt.build(moment)
+        assertTrue(prompt.contains("Answer general knowledge from what you know"))
+        assertTrue(prompt.contains("look it up yourself"))
+    }
+
+    @Test
+    fun `shared documents are scoped to questions about them`() {
+        // Unscoped, a document shared into the chat made every later answer come "from it".
+        assertTrue(SystemPrompt.build(moment).contains("Use it only for\nquestions about that document"))
+    }
+
+    @Test
     fun `includes local time and zone`() {
         val prompt = SystemPrompt.build(moment)
         assertTrue(prompt.contains("14:30"))
