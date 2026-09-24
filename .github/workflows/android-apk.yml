@@ -30,6 +30,11 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # The default also installs the legacy "tools" package, which cmdline-tools 16
+          # no longer provides, failing the step before anything builds.
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
 
       - name: Cache Gradle
         uses: actions/cache@v4
@@ -101,6 +106,11 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # The default also installs the legacy "tools" package, which cmdline-tools 16
+          # no longer provides, failing the step before anything builds.
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
 
       - name: Cache Gradle
         uses: actions/cache@v4
