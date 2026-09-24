@@ -75,7 +75,7 @@ class MainActivity : FragmentActivity() {
         if (promptVisible) return
         promptVisible = true
         appLock.prompt(
-            title = "Unlock Sarvam Voice",
+            title = "Unlock Boliyan",
             subtitle = "Protects the API key stored on this device",
             onSuccess = {
                 promptVisible = false

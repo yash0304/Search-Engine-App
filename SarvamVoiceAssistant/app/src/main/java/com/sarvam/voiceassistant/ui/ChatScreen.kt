@@ -24,6 +24,14 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.automirrored.filled.MenuBook
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Newspaper
+import androidx.compose.material.icons.filled.Translate
+import androidx.compose.material.icons.filled.WaterDrop
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AttachFile
@@ -100,6 +108,11 @@ fun ChatScreen(
     val documentPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
     ) { uri -> uri?.let(viewModel::readDocument) }
+
+    fun openDocumentPicker() {
+        onOpeningOwnScreen()
+        documentPicker.launch(arrayOf("application/pdf", "image/*"))
+    }
 
     val micPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -181,7 +194,7 @@ fun ChatScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
-                title = { Text("Sarvam Voice") },
+                title = { Text(if (state.messages.isEmpty()) "" else "Boliyan") },
                 actions = {
                     if (state.messages.isNotEmpty()) {
                         IconButton(onClick = viewModel::clearConversation) {
@@ -210,10 +223,7 @@ fun ChatScreen(
                     draft = ""
                 },
                 onMic = ::requestMic,
-                onAttach = {
-                    onOpeningOwnScreen()
-                    documentPicker.launch(arrayOf("application/pdf", "image/*"))
-                },
+                onAttach = ::openDocumentPicker,
             )
         },
     ) { padding ->
@@ -223,7 +233,13 @@ fun ChatScreen(
                 .padding(padding),
         ) {
             if (state.messages.isEmpty()) {
-                EmptyState(hasApiKey = state.hasApiKey, onOpenSettings = { showSettings = true })
+                WelcomeScreen(
+                    hasApiKey = state.hasApiKey,
+                    busy = state.isBusy,
+                    onOpenSettings = { showSettings = true },
+                    onAsk = { prompt -> viewModel.sendText(prompt, "en-IN") },
+                    onReadDocument = ::openDocumentPicker,
+                )
             } else {
                 ConversationList(state.messages)
             }
@@ -292,44 +308,108 @@ private fun MessageBubble(message: Message) {
     }
 }
 
+/** One thing the app can do, shown on the welcome screen as a tappable example. */
+private data class Example(val icon: ImageVector, val title: String, val prompt: String?)
+
+private val examples = listOf(
+    Example(Icons.Filled.WaterDrop, "Rain on your route", "Is it raining on the way to Vadodara?"),
+    Example(Icons.Filled.Translate, "Translate anything", "How do you say good morning in Gujarati?"),
+    Example(Icons.AutoMirrored.Filled.MenuBook, "Offline dictionary", "What is the meaning of ephemeral?"),
+    Example(Icons.Filled.Newspaper, "Latest facts from the web", "Who won the most recent cricket World Cup?"),
+    // No prompt: this one opens the file picker.
+    Example(Icons.Filled.Description, "Read a photo or PDF", null),
+)
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun EmptyState(hasApiKey: Boolean, onOpenSettings: () -> Unit) {
+private fun WelcomeScreen(
+    hasApiKey: Boolean,
+    busy: Boolean,
+    onOpenSettings: () -> Unit,
+    onAsk: (String) -> Unit,
+    onReadDocument: () -> Unit,
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(32.dp),
-        verticalArrangement = Arrangement.Center,
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 24.dp, vertical = 16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Icon(
-            Icons.Filled.Mic,
-            contentDescription = null,
-            modifier = Modifier.size(72.dp),
-            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
-        )
+        Spacer(Modifier.height(24.dp))
+        Surface(
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.primaryContainer,
+            modifier = Modifier.size(88.dp),
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    Icons.Filled.Mic,
+                    contentDescription = null,
+                    modifier = Modifier.size(44.dp),
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                )
+            }
+        }
         Spacer(Modifier.height(16.dp))
-        if (hasApiKey) {
+        Text("Boliyan", style = MaterialTheme.typography.displaySmall)
+        Text(
+            text = "बोलियाँ · બોલીઓ · every Indian tongue",
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        Spacer(Modifier.height(12.dp))
+
+        if (!hasApiKey) {
             Text(
-                text = "Tap the microphone and speak in Gujarati, Hindi, or English.",
+                text = "Add your Sarvam API key to get started.",
                 style = MaterialTheme.typography.bodyLarge,
                 textAlign = TextAlign.Center,
             )
             Spacer(Modifier.height(8.dp))
-            Text(
-                text = "The assistant replies in the same language and reads it aloud. " +
-                    "Tap the paperclip to have it read a photo or PDF.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-            )
-        } else {
-            Text(
-                text = "Add your Sarvam API key to get started.",
-                style = MaterialTheme.typography.titleMedium,
-                textAlign = TextAlign.Center,
-            )
-            Spacer(Modifier.height(12.dp))
             TextButton(onClick = onOpenSettings) { Text("Open Settings") }
+            return@Column
+        }
+
+        Text(
+            text = "Tap the microphone and talk in Gujarati, Hindi, English or any Indian " +
+                "language. It answers out loud, in the language you used.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+        )
+        Spacer(Modifier.height(24.dp))
+        Text(
+            text = "Try one",
+            style = MaterialTheme.typography.labelLarge,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(8.dp))
+
+        examples.forEach { example ->
+            Card(
+                onClick = { example.prompt?.let(onAsk) ?: onReadDocument() },
+                enabled = !busy,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(example.icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(16.dp))
+                    Column {
+                        Text(example.title, style = MaterialTheme.typography.titleSmall)
+                        Text(
+                            text = example.prompt?.let { "\u201C$it\u201D" } ?: "Receipts, letters, notices, forms",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
         }
     }
 }

@@ -41,7 +41,7 @@ fun LockScreen(message: String?, onUnlock: () -> Unit) {
         )
         Spacer(Modifier.height(20.dp))
         Text(
-            text = "Sarvam Voice is locked",
+            text = "Boliyan is locked",
             style = MaterialTheme.typography.titleMedium,
             textAlign = TextAlign.Center,
         )

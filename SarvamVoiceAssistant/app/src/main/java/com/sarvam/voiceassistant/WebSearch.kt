@@ -32,7 +32,7 @@ class WebSearch {
         private const val TAG = "WebSearch"
 
         // Wikipedia's API policy asks for an identifying User-Agent.
-        private const val USER_AGENT = "SarvamVoiceAssistant/1.0 (Android; personal project)"
+        private const val USER_AGENT = "Boliyan/1.0 (Android; personal project)"
         private const val MAX_ARTICLES = 2
     }
 

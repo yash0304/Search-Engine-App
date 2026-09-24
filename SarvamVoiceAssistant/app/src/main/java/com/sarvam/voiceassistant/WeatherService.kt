@@ -33,7 +33,7 @@ class WeatherService {
         const val CURRENT_FIELDS = "precipitation,weather_code,temperature_2m"
 
         // Nominatim's usage policy requires an identifying User-Agent.
-        const val USER_AGENT = "SarvamVoiceAssistant/1.0 (Android; personal project)"
+        const val USER_AGENT = "Boliyan/1.0 (Android; personal project)"
     }
 
     /**

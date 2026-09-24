@@ -1,4 +1,11 @@
-# Sarvam Voice Assistant (Android)
+# Boliyan (Android)
+
+*बोलियाँ — "tongues, dialects".* A voice assistant for every Indian language, built on
+Sarvam AI.
+
+> The app is called **Boliyan**; the project folder and package name
+> (`com.sarvam.voiceassistant`) are unchanged, so existing installs keep their saved key and
+> settings, and the build paths stay the same.
 
 A voice assistant for Gujarati, Hindi, English and the other Indian languages, built on
 Sarvam AI's APIs. Native Kotlin, Jetpack Compose, Material 3.
