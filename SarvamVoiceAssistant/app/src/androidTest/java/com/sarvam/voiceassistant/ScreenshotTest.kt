@@ -2,27 +2,37 @@ package com.sarvam.voiceassistant
 
 import android.graphics.Bitmap
 import android.util.Log
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.sarvam.voiceassistant.ui.BoliyanColors
 import com.sarvam.voiceassistant.ui.ChatContent
 import com.sarvam.voiceassistant.ui.LockScreen
 import com.sarvam.voiceassistant.ui.SarvamTheme
 import com.sarvam.voiceassistant.ui.SettingsDialog
 import com.sarvam.voiceassistant.ui.SpeechSettings
+import java.io.File
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
-import java.io.File
 
 /**
  * Renders each screen with sample data and saves it, so the design can be reviewed from CI
@@ -57,16 +67,37 @@ class ScreenshotTest {
     fun welcomeNoKey() = shoot("3_welcome_no_key") { chat(UiState(hasApiKey = false)) }
 
     @Test
-    fun conversationLight() = shoot("4_chat_light") { chat(UiState(hasApiKey = true, messages = conversation)) }
+    fun conversationLight() = shoot("4_chat_light") { chat(inConversation(conversation)) }
 
     @Test
     fun conversationDark() = shoot("5_chat_dark", dark = true) {
-        chat(UiState(hasApiKey = true, messages = conversation))
+        chat(inConversation(conversation))
     }
 
     @Test
     fun listening() = shoot("6_listening") {
-        chat(UiState(hasApiKey = true, messages = conversation.take(2), stage = Stage.RECORDING), amplitude = 0.7f)
+        chat(inConversation(conversation.take(2)).copy(stage = Stage.RECORDING), amplitude = 0.7f)
+    }
+
+    /** After Back: the welcome page, with the saved chat one tap away. */
+    @Test
+    fun welcomeWithSavedChat() = shoot("9_welcome_continue") {
+        chat(inConversation(conversation).copy(viewingConversation = false))
+    }
+
+    /** The launcher icon as the home screen draws it: ink background, the mark on top. */
+    @Test
+    fun launcherIcon() = shoot("10_launcher_icon") {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Box(
+                Modifier
+                    .size(216.dp)
+                    .clip(CircleShape)
+                    .background(BoliyanColors.Ink),
+            ) {
+                Image(painterResource(R.drawable.ic_launcher_foreground), null, Modifier.fillMaxSize())
+            }
+        }
     }
 
     @Test
@@ -103,6 +134,18 @@ class ScreenshotTest {
             .onFailure { Log.w(TAG, "Could not capture the settings dialog", it) }
     }
 
+    /** Sent about 5 hours ago, so the "disappears in" note has something real to say. */
+    private fun inConversation(messages: List<Message>): UiState {
+        val sentAt = System.currentTimeMillis() - 5 * 60 * 60 * 1000L
+        val aged = messages.map { it.copy(sentAt = sentAt) }
+        return UiState(
+            hasApiKey = true,
+            messages = aged,
+            viewingConversation = true,
+            nextExpiry = sentAt + ConversationStore.LIFETIME_MS,
+        )
+    }
+
     @Composable
     private fun chat(state: UiState, amplitude: Float = 0f) {
         ChatContent(
@@ -117,6 +160,7 @@ class ScreenshotTest {
             onAsk = {},
             onOpenSettings = {},
             onClearConversation = {},
+            onShowConversation = {},
             animateGreeting = false,
         )
     }

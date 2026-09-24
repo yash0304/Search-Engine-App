@@ -14,6 +14,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.size
@@ -33,11 +34,10 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import com.sarvam.voiceassistant.R
 import kotlinx.coroutines.delay
 import kotlin.math.PI
 import kotlin.math.sin
@@ -92,13 +92,14 @@ fun Waveform(
 }
 
 /**
- * "बो" — the assistant's mark, used as its avatar and on the lock screen.
+ * Boliyan's mark — a speech bubble holding the brand waveform, on an ink circle. The same
+ * artwork as the launcher icon, used as the assistant's avatar and on the lock screen.
  *
  * @param ring outlines the circle; needed where the background is itself ink, or the circle
  *   disappears into it.
  */
 @Composable
-fun Monogram(size: Dp, modifier: Modifier = Modifier, ring: Color? = null) {
+fun LogoMark(size: Dp, modifier: Modifier = Modifier, ring: Color? = null) {
     Surface(
         shape = CircleShape,
         color = BoliyanColors.Ink,
@@ -106,12 +107,11 @@ fun Monogram(size: Dp, modifier: Modifier = Modifier, ring: Color? = null) {
         modifier = modifier.size(size),
     ) {
         Box(contentAlignment = Alignment.Center) {
-            Text(
-                text = "बो",
-                color = BoliyanColors.Marigold,
-                fontFamily = FontFamily.Serif,
-                fontWeight = FontWeight.Bold,
-                fontSize = (size.value * 0.42f).sp,
+            Image(
+                painter = painterResource(R.drawable.ic_boliyan_mark),
+                contentDescription = null,
+                // The artwork fills its 48-unit box edge to edge; inset it inside the circle.
+                modifier = Modifier.size(size * 0.72f),
             )
         }
     }

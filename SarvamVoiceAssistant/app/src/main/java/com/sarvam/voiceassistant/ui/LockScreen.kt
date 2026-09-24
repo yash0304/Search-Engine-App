@@ -42,7 +42,7 @@ fun LockScreen(message: String?, onUnlock: () -> Unit) {
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Monogram(size = 104.dp, ring = BoliyanColors.Marigold)
+        LogoMark(size = 104.dp, ring = BoliyanColors.Marigold)
         Spacer(Modifier.height(24.dp))
         Text(
             text = "Boliyan",

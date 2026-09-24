@@ -720,6 +720,20 @@ class SarvamClient(private val apiKey: String) {
             parts.joinToString("\n\n")
     }
 
+    /**
+     * Rebuilds the model's memory from a saved conversation — after the app was closed and
+     * reopened, or once expired messages have been dropped — so it still knows what was said.
+     */
+    fun restoreConversation(messages: List<Message>, documents: List<Pair<String, String>>) {
+        history.clear()
+        messages.forEach { message ->
+            val role = if (message.role == Role.USER) "user" else "assistant"
+            history.add(JSONObject().put("role", role).put("content", message.text))
+        }
+        documentContext.clear()
+        documentContext.addAll(documents)
+    }
+
     fun resetConversation() {
         history.clear()
         documentContext.clear()

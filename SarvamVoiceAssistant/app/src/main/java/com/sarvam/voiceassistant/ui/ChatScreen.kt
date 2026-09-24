@@ -2,6 +2,7 @@ package com.sarvam.voiceassistant.ui
 
 import android.Manifest
 import android.content.pm.PackageManager
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateFloatAsState
@@ -31,6 +32,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AttachFile
@@ -40,6 +43,7 @@ import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Newspaper
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material.icons.filled.WaterDrop
 import androidx.compose.material3.Card
@@ -82,6 +86,7 @@ import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import com.sarvam.voiceassistant.AppLock
 import com.sarvam.voiceassistant.ChatViewModel
+import com.sarvam.voiceassistant.ConversationStore
 import com.sarvam.voiceassistant.Language
 import com.sarvam.voiceassistant.LocationProvider
 import com.sarvam.voiceassistant.Message
@@ -216,6 +221,7 @@ fun ChatScreen(
         onAsk = { prompt -> viewModel.sendText(prompt, "en-IN") },
         onOpenSettings = { showSettings = true },
         onClearConversation = viewModel::clearConversation,
+        onShowConversation = viewModel::showConversation,
         snackbarHostState = snackbarHostState,
     )
 }
@@ -238,10 +244,15 @@ internal fun ChatContent(
     onAsk: (String) -> Unit,
     onOpenSettings: () -> Unit,
     onClearConversation: () -> Unit,
+    onShowConversation: (Boolean) -> Unit,
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
     animateGreeting: Boolean = true,
 ) {
-    val conversation = state.messages.isNotEmpty()
+    val conversation = state.viewingConversation && state.messages.isNotEmpty()
+
+    // Back from a chat returns to the welcome page instead of closing the app; the chat is
+    // kept and reachable from there. Back from the welcome page leaves as usual.
+    BackHandler(enabled = conversation) { onShowConversation(false) }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -253,12 +264,18 @@ internal fun ChatContent(
                 ),
                 navigationIcon = {
                     if (conversation) {
-                        Monogram(size = 32.dp, modifier = Modifier.padding(start = 12.dp))
+                        IconButton(onClick = { onShowConversation(false) }) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to the start")
+                        }
                     }
                 },
                 title = {
                     if (conversation) {
-                        Text("Boliyan", style = MaterialTheme.typography.titleLarge)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            LogoMark(size = 30.dp)
+                            Spacer(Modifier.width(10.dp))
+                            Text("Boliyan", style = MaterialTheme.typography.titleLarge)
+                        }
                     }
                 },
                 actions = {
@@ -295,11 +312,14 @@ internal fun ChatContent(
                 .padding(padding),
         ) {
             if (conversation) {
-                ConversationList(state.messages)
+                ConversationList(state.messages, state.nextExpiry)
             } else {
                 WelcomeScreen(
                     hasApiKey = state.hasApiKey,
                     busy = state.isBusy,
+                    savedMessages = state.messages.size,
+                    nextExpiry = state.nextExpiry,
+                    onContinue = { onShowConversation(true) },
                     onOpenSettings = onOpenSettings,
                     onAsk = onAsk,
                     onReadDocument = onAttach,
@@ -327,6 +347,9 @@ private val examples = listOf(
 private fun WelcomeScreen(
     hasApiKey: Boolean,
     busy: Boolean,
+    savedMessages: Int,
+    nextExpiry: Long?,
+    onContinue: () -> Unit,
     onOpenSettings: () -> Unit,
     onAsk: (String) -> Unit,
     onReadDocument: () -> Unit,
@@ -379,6 +402,11 @@ private fun WelcomeScreen(
                 }
             }
             return@Column
+        }
+
+        if (savedMessages > 0) {
+            ContinueCard(savedMessages, nextExpiry, onContinue)
+            Spacer(Modifier.height(18.dp))
         }
 
         Text("TRY ONE", style = overline, modifier = Modifier.fillMaxWidth())
@@ -445,6 +473,47 @@ private fun WelcomeScreen(
     }
 }
 
+/** Back to the conversation, with how long before it starts to disappear. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ContinueCard(messages: Int, nextExpiry: Long?, onContinue: () -> Unit) {
+    Card(
+        onClick = onContinue,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+        shape = MaterialTheme.shapes.large,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            LogoMark(size = 40.dp)
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "Continue your conversation",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                )
+                Text(
+                    text = "$messages message${if (messages == 1) "" else "s"}" +
+                        (expiryText(nextExpiry)?.let { " · first disappears in $it" } ?: ""),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.75f),
+                )
+            }
+            Icon(
+                Icons.AutoMirrored.Filled.ArrowForward,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+            )
+        }
+    }
+}
+
+private fun expiryText(nextExpiry: Long?): String? =
+    nextExpiry?.let { ConversationStore.describeRemaining(it - System.currentTimeMillis()) }
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ExampleTile(
@@ -486,11 +555,12 @@ private fun ExampleTile(
 // ── Conversation ────────────────────────────────────────────────────────
 
 @Composable
-private fun ConversationList(messages: List<Message>) {
+private fun ConversationList(messages: List<Message>, nextExpiry: Long?) {
     val listState = rememberLazyListState()
 
     LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
+        // +1 for the note above the first message.
+        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size)
     }
 
     LazyColumn(
@@ -499,6 +569,28 @@ private fun ConversationList(messages: List<Message>) {
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
+        item(key = "disappearing") {
+            // Said up front, so a chat vanishing tomorrow is never a surprise.
+            Row(
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(
+                    Icons.Filled.Timer,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(14.dp),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = "Chats disappear 24 hours after they're sent" +
+                        (expiryText(nextExpiry)?.let { " · next in $it" } ?: ""),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
         items(messages, key = { it.id }) { message -> MessageBubble(message) }
     }
 }
@@ -513,7 +605,7 @@ private fun MessageBubble(message: Message) {
         verticalAlignment = Alignment.Bottom,
     ) {
         if (!fromUser) {
-            Monogram(size = 30.dp)
+            LogoMark(size = 30.dp)
             Spacer(Modifier.width(8.dp))
         }
 

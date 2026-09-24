@@ -8,6 +8,7 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -15,18 +16,6 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.util.concurrent.atomic.AtomicLong
-
-enum class Role { USER, ASSISTANT }
-
-private val messageIds = AtomicLong(0)
-
-data class Message(
-    val role: Role,
-    val text: String,
-    val languageCode: String? = null,
-    val id: Long = messageIds.incrementAndGet(),
-)
 
 /** What the pipeline is currently doing — drives the status line and the mic button. */
 enum class Stage { IDLE, RECORDING, TRANSCRIBING, THINKING, SEARCHING, SPEAKING, READING }
@@ -60,6 +49,13 @@ data class UiState(
      * this is what shows whether it works on a real phone.
      */
     val speechDiagnostics: String = "No voice turn yet.",
+    /**
+     * Whether the conversation is on screen. Back returns to the welcome page without losing
+     * the chat, which stays available from there until its messages expire.
+     */
+    val viewingConversation: Boolean = false,
+    /** When the oldest message disappears, for the "disappears in 5h" note; null if none. */
+    val nextExpiry: Long? = null,
 ) {
     val isBusy: Boolean get() = stage != Stage.IDLE
 }
@@ -75,8 +71,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private var client: SarvamClient? = null
     private var pipeline: Job? = null
 
+    /** The chat, kept on the phone for 24 hours; see [ConversationStore]. */
+    private val conversations = ConversationStore(File(application.filesDir, CONVERSATION_FILE))
+    private val saved = conversations.load()
+
+    /** Documents shared into this conversation, which expire with it. */
+    private val sharedDocuments = saved.documents.toMutableList()
+
     private val _uiState = MutableStateFlow(
         UiState(
+            messages = saved.messages,
+            nextExpiry = saved.nextExpiry(),
             hasApiKey = store.hasApiKey(),
             speaker = store.preferredSpeaker,
             inputLanguage = store.inputLanguage,
@@ -100,6 +105,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             client = newClient(store.apiKey)
             refreshModels()
         }
+        // Messages expire while the app is open too, not only between launches.
+        viewModelScope.launch {
+            while (true) {
+                delay(EXPIRY_CHECK_MS)
+                dropExpired()
+            }
+        }
     }
 
     private fun newClient(key: String) = SarvamClient(key).apply {
@@ -109,6 +121,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         // model asks the user to name a place instead.
         locationSource = { if (store.locationEnabled) location.current() else null }
         dictionarySource = { word -> dictionary.lookup(word) }
+        // Picks up where the saved conversation left off, so a reopened app still has context.
+        restoreConversation(_uiState.value.messages, sharedDocuments.map { it.name to it.text })
     }
 
     companion object {
@@ -116,6 +130,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
         /** The speech-to-text endpoint accepts up to 30 seconds of audio. */
         private const val MAX_RECORD_MS = 25_000L
+
+        private const val CONVERSATION_FILE = "conversation.json"
+        private const val EXPIRY_CHECK_MS = 60_000L
     }
 
     // ── Settings ─────────────────────────────────────────────────────────
@@ -244,10 +261,20 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun dismissError() = _uiState.update { it.copy(error = null) }
 
+    /** The trash button: deletes the conversation now, rather than waiting out the 24 hours. */
     fun clearConversation() {
         cancelPipeline()
         client?.resetConversation()
-        _uiState.update { it.copy(messages = emptyList(), error = null) }
+        sharedDocuments.clear()
+        conversations.clear()
+        _uiState.update {
+            it.copy(messages = emptyList(), error = null, viewingConversation = false, nextExpiry = null)
+        }
+    }
+
+    /** Back from the chat goes to the welcome page; "Continue" there comes back. */
+    fun showConversation(visible: Boolean) {
+        _uiState.update { it.copy(viewingConversation = visible && it.messages.isNotEmpty()) }
     }
 
     // ── Voice pipeline ───────────────────────────────────────────────────
@@ -412,6 +439,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     _uiState.update { it.copy(searchQuery = "$step ${prepared.name}") }
                 }
                 api.attachDocument(prepared.name, text)
+                sharedDocuments.add(ConversationStore.SavedDocument(prepared.name, text, System.currentTimeMillis()))
                 _uiState.update { it.copy(searchQuery = null) }
 
                 val words = text.split(Regex("\\s+")).count { it.isNotBlank() }
@@ -458,8 +486,38 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun setStage(stage: Stage) = _uiState.update { it.copy(stage = stage) }
 
-    private fun addMessage(message: Message) =
-        _uiState.update { it.copy(messages = it.messages + message) }
+    private fun addMessage(message: Message) {
+        _uiState.update { it.copy(messages = it.messages + message, viewingConversation = true) }
+        persist()
+    }
+
+    /** Saves the conversation off the main thread; the store writes atomically. */
+    private fun persist() {
+        val snapshot = ConversationStore.Snapshot(_uiState.value.messages, sharedDocuments.toList())
+        _uiState.update { it.copy(nextExpiry = snapshot.nextExpiry()) }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { conversations.save(snapshot) }.onFailure { Log.w(TAG, "Could not save the conversation", it) }
+        }
+    }
+
+    /** Drops whatever has passed its 24 hours, from the screen and from the model's memory. */
+    private fun dropExpired() {
+        val current = ConversationStore.Snapshot(_uiState.value.messages, sharedDocuments.toList())
+        val kept = conversations.prune(current)
+        if (kept.messages.size == current.messages.size && kept.documents.size == current.documents.size) return
+
+        sharedDocuments.clear()
+        sharedDocuments.addAll(kept.documents)
+        client?.restoreConversation(kept.messages, kept.documents.map { it.name to it.text })
+        _uiState.update {
+            it.copy(
+                messages = kept.messages,
+                nextExpiry = kept.nextExpiry(),
+                viewingConversation = it.viewingConversation && kept.messages.isNotEmpty(),
+            )
+        }
+        persist()
+    }
 
     override fun onCleared() {
         super.onCleared()

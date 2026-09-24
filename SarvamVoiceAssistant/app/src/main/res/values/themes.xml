@@ -6,6 +6,6 @@
       descendant — all in-app colour comes from MaterialTheme in Theme.kt.
     -->
     <style name="Theme.SarvamVoiceAssistant" parent="android:Theme.Material.Light.NoActionBar">
-        <item name="android:windowBackground">@android:color/white</item>
+        <item name="android:windowBackground">#FFFBF6EE</item>
     </style>
 </resources>

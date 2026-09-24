@@ -1,16 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- A microphone glyph centred inside the 108dp adaptive-icon safe zone. -->
+<!-- Launcher foreground: the Boliyan mark inside the adaptive-icon safe zone. Generated; see the commit that added it. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <group android:translateX="30" android:translateY="30">
-        <path
-            android:fillColor="#FFFFFFFF"
-            android:pathData="M24,30c3.31,0 6,-2.69 6,-6V12c0,-3.31 -2.69,-6 -6,-6s-6,2.69 -6,6v12C18,27.31 20.69,30 24,30z" />
-        <path
-            android:fillColor="#FFFFFFFF"
-            android:pathData="M36,24c0,6.63 -5.37,12 -12,12s-12,-5.37 -12,-12H8c0,7.96 5.94,14.54 13.66,15.72V48h4.68v-8.28C34.06,38.54 40,31.96 40,24H36z" />
+    <group android:scaleX="1.3" android:scaleY="1.3" android:translateX="22.8" android:translateY="21.5">
+        <path android:fillColor="#FFFBF6EE" android:pathData="M15,8H33A9,9 0 0 1 42,17V25A9,9 0 0 1 33,34H15A9,9 0 0 1 6,25V17A9,9 0 0 1 15,8Z" />
+        <path android:fillColor="#FFFBF6EE" android:pathData="M11.5,30.5L9.5,42L21,33.2Z" />
+        <path android:fillColor="#FF12706E" android:pathData="M11.8,17A1.8,1.8 0 0 1 13.6,18.8V23.2A1.8,1.8 0 0 1 11.8,25A1.8,1.8 0 0 1 10,23.2V18.8A1.8,1.8 0 0 1 11.8,17Z" />
+        <path android:fillColor="#FFD1492E" android:pathData="M17.9,14A1.8,1.8 0 0 1 19.7,15.8V26.2A1.8,1.8 0 0 1 17.9,28A1.8,1.8 0 0 1 16.1,26.2V15.8A1.8,1.8 0 0 1 17.9,14Z" />
+        <path android:fillColor="#FF221F52" android:pathData="M24,11.5A1.8,1.8 0 0 1 25.8,13.3V28.7A1.8,1.8 0 0 1 24,30.5A1.8,1.8 0 0 1 22.2,28.7V13.3A1.8,1.8 0 0 1 24,11.5Z" />
+        <path android:fillColor="#FFEBA43C" android:pathData="M30.1,15A1.8,1.8 0 0 1 31.9,16.8V25.2A1.8,1.8 0 0 1 30.1,27A1.8,1.8 0 0 1 28.3,25.2V16.8A1.8,1.8 0 0 1 30.1,15Z" />
+        <path android:fillColor="#FF6C63D9" android:pathData="M36.2,17.75A1.8,1.8 0 0 1 38,19.55V22.45A1.8,1.8 0 0 1 36.2,24.25A1.8,1.8 0 0 1 34.4,22.45V19.55A1.8,1.8 0 0 1 36.2,17.75Z" />
     </group>
 </vector>
