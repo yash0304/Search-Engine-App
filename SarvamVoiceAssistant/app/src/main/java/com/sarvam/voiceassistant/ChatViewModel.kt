@@ -16,6 +16,16 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.UUID
+
+/** One row in the welcome page's list of recent chats. */
+data class ChatSummary(
+    val id: String,
+    val title: String,
+    val messageCount: Int,
+    val lastActivity: Long,
+    val nextExpiry: Long?,
+)
 
 /** What the pipeline is currently doing — drives the status line and the mic button. */
 enum class Stage { IDLE, RECORDING, TRANSCRIBING, THINKING, SEARCHING, SPEAKING, READING }
@@ -50,12 +60,14 @@ data class UiState(
      */
     val speechDiagnostics: String = "No voice turn yet.",
     /**
-     * Whether the conversation is on screen. Back returns to the welcome page without losing
-     * the chat, which stays available from there until its messages expire.
+     * Whether a chat is open. Back returns to the welcome page, which lists recent chats;
+     * asking anything from there starts a new one.
      */
     val viewingConversation: Boolean = false,
-    /** When the oldest message disappears, for the "disappears in 5h" note; null if none. */
+    /** When the open chat's oldest message disappears; null if none. */
     val nextExpiry: Long? = null,
+    /** Chats from the last 24 hours, most recent first, for the welcome page. */
+    val chats: List<ChatSummary> = emptyList(),
 ) {
     val isBusy: Boolean get() = stage != Stage.IDLE
 }
@@ -71,17 +83,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private var client: SarvamClient? = null
     private var pipeline: Job? = null
 
-    /** The chat, kept on the phone for 24 hours; see [ConversationStore]. */
+    /** Chats, kept on the phone for 24 hours; see [ConversationStore]. */
     private val conversations = ConversationStore(File(application.filesDir, CONVERSATION_FILE))
-    private val saved = conversations.load()
 
-    /** Documents shared into this conversation, which expire with it. */
-    private val sharedDocuments = saved.documents.toMutableList()
+    /** Every chat from the last day, most recent first. The source of truth for the UI. */
+    private var chats: List<ConversationStore.Chat> = conversations.load()
+
+    /** The chat on screen, or null on the welcome page — where a question starts a new one. */
+    private var activeChatId: String? = null
 
     private val _uiState = MutableStateFlow(
         UiState(
-            messages = saved.messages,
-            nextExpiry = saved.nextExpiry(),
+            chats = chats.map(::summaryOf),
             hasApiKey = store.hasApiKey(),
             speaker = store.preferredSpeaker,
             inputLanguage = store.inputLanguage,
@@ -121,8 +134,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         // model asks the user to name a place instead.
         locationSource = { if (store.locationEnabled) location.current() else null }
         dictionarySource = { word -> dictionary.lookup(word) }
-        // Picks up where the saved conversation left off, so a reopened app still has context.
-        restoreConversation(_uiState.value.messages, sharedDocuments.map { it.name to it.text })
+        // A client created mid-chat (a new key saved) picks up that chat's memory.
+        activeChat()?.let { restoreConversation(it.messages, it.documents.map { d -> d.name to d.text }) }
     }
 
     companion object {
@@ -261,20 +274,66 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun dismissError() = _uiState.update { it.copy(error = null) }
 
-    /** The trash button: deletes the conversation now, rather than waiting out the 24 hours. */
+    // ── Chats ────────────────────────────────────────────────────────────
+
+    /** The trash button: deletes the open chat now, rather than waiting out its 24 hours. */
     fun clearConversation() {
+        val id = activeChatId ?: return
         cancelPipeline()
         client?.resetConversation()
-        sharedDocuments.clear()
-        conversations.clear()
-        _uiState.update {
-            it.copy(messages = emptyList(), error = null, viewingConversation = false, nextExpiry = null)
-        }
+        chats = chats.filterNot { it.id == id }
+        activeChatId = null
+        _uiState.update { it.copy(error = null) }
+        publish()
+        persist()
     }
 
-    /** Back from the chat goes to the welcome page; "Continue" there comes back. */
-    fun showConversation(visible: Boolean) {
-        _uiState.update { it.copy(viewingConversation = visible && it.messages.isNotEmpty()) }
+    /** Back from a chat: the welcome page, where asking anything starts a fresh chat. */
+    fun leaveChat() {
+        activeChatId = null
+        publish()
+    }
+
+    /** Reopens a recent chat with its own messages, documents and memory. */
+    fun openChat(id: String) {
+        // The model has one memory at a time; switching mid-reply would mix two chats.
+        if (_uiState.value.isBusy) return
+        val chat = chats.firstOrNull { it.id == id } ?: return
+        activeChatId = id
+        client?.restoreConversation(chat.messages, chat.documents.map { it.name to it.text })
+        publish()
+    }
+
+    private fun activeChat(): ConversationStore.Chat? = chats.firstOrNull { it.id == activeChatId }
+
+    /** Starts a chat and makes it the open one, with a fresh model memory. */
+    private fun startChat(title: String): String {
+        val chat = ConversationStore.Chat(UUID.randomUUID().toString(), title, System.currentTimeMillis())
+        chats = listOf(chat) + chats
+        activeChatId = chat.id
+        client?.resetConversation()
+        return chat.id
+    }
+
+    private fun summaryOf(chat: ConversationStore.Chat) = ChatSummary(
+        id = chat.id,
+        title = chat.title,
+        messageCount = chat.messages.size,
+        lastActivity = chat.lastActivity,
+        nextExpiry = chat.nextExpiry(),
+    )
+
+    /** Pushes the chats and the open chat to the UI. */
+    private fun publish() {
+        val active = activeChat()
+        _uiState.update {
+            it.copy(
+                messages = active?.messages.orEmpty(),
+                viewingConversation = active != null,
+                nextExpiry = active?.nextExpiry(),
+                chats = chats.sortedByDescending { chat -> chat.lastActivity }.map(::summaryOf),
+            )
+        }
     }
 
     // ── Voice pipeline ───────────────────────────────────────────────────
@@ -326,10 +385,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 // In translate mode the text is English whatever was spoken; tagging it with the
                 // spoken language would have the English reply read by, say, a Hindi voice.
                 val textLanguage = if (state.sttMode == "translate") "en-IN" else transcription.languageCode
-                addMessage(Message(Role.USER, transcription.transcript, textLanguage))
+                val chatId = addMessage(Message(Role.USER, transcription.transcript, textLanguage))
                 noteSpeech(heard = heard)
 
-                respondTo(api, transcription.transcript, textLanguage)
+                respondTo(api, transcription.transcript, textLanguage, chatId)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -356,8 +415,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
         pipeline = viewModelScope.launch {
             try {
-                addMessage(Message(Role.USER, trimmed, languageCode))
-                respondTo(api, trimmed, languageCode)
+                val chatId = addMessage(Message(Role.USER, trimmed, languageCode))
+                respondTo(api, trimmed, languageCode, chatId)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -368,14 +427,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Shared tail of both paths: ask the model, then speak the reply. */
-    private suspend fun respondTo(api: SarvamClient, prompt: String, languageCode: String) {
+    /**
+     * Shared tail of both paths: ask the model, then speak the reply. The reply goes to
+     * [chatId] — the chat the question was asked in — even if you have gone Back since.
+     */
+    private suspend fun respondTo(api: SarvamClient, prompt: String, languageCode: String, chatId: String) {
         setStage(Stage.THINKING)
         val reply = api.chat(prompt) { query ->
             _uiState.update { it.copy(stage = Stage.SEARCHING, searchQuery = query) }
         }
         _uiState.update { it.copy(searchQuery = null) }
-        addMessage(Message(Role.ASSISTANT, reply, languageCode))
+        addMessage(Message(Role.ASSISTANT, reply, languageCode), chatId)
 
         setStage(Stage.SPEAKING)
         // Speak in the language the reply is written in, which is not always the question's.
@@ -438,8 +500,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 val text = api.documents.read(prepared.pdf, language) { step ->
                     _uiState.update { it.copy(searchQuery = "$step ${prepared.name}") }
                 }
+                // From the welcome page a document starts its own chat, so it never becomes
+                // context for unrelated questions elsewhere; inside a chat it joins that chat.
+                val chatId = activeChatId ?: startChat(ConversationStore.titleFor(null, prepared.name))
                 api.attachDocument(prepared.name, text)
-                sharedDocuments.add(ConversationStore.SavedDocument(prepared.name, text, System.currentTimeMillis()))
+                val document = ConversationStore.SavedDocument(prepared.name, text, System.currentTimeMillis())
+                chats = chats.map { if (it.id == chatId) it.copy(documents = it.documents + document) else it }
                 _uiState.update { it.copy(searchQuery = null) }
 
                 val words = text.split(Regex("\\s+")).count { it.isNotBlank() }
@@ -449,6 +515,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         "I've read \"${prepared.name}\" ($words words). Ask me anything about it — " +
                             "to summarise it, translate it, or find something in it.",
                     ),
+                    chatId,
                 )
             } catch (e: CancellationException) {
                 throw e
@@ -486,36 +553,47 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun setStage(stage: Stage) = _uiState.update { it.copy(stage = stage) }
 
-    private fun addMessage(message: Message) {
-        _uiState.update { it.copy(messages = it.messages + message, viewingConversation = true) }
+    /**
+     * Adds [message] to [chatId], or to a new chat when none is open — which is what makes a
+     * question from the welcome page start fresh.
+     *
+     * @return the chat it went into, so the reply can follow it there.
+     */
+    private fun addMessage(message: Message, chatId: String? = activeChatId): String {
+        val id = chatId ?: startChat(ConversationStore.titleFor(message.text, null))
+        // A chat deleted while its reply was on the way simply does not get the reply.
+        chats = chats.map { if (it.id == id) it.copy(messages = it.messages + message) else it }
+        publish()
         persist()
+        return id
     }
 
-    /** Saves the conversation off the main thread; the store writes atomically. */
+    /** Saves every chat off the main thread; the store writes atomically. */
     private fun persist() {
-        val snapshot = ConversationStore.Snapshot(_uiState.value.messages, sharedDocuments.toList())
-        _uiState.update { it.copy(nextExpiry = snapshot.nextExpiry()) }
+        val snapshot = chats
         viewModelScope.launch(Dispatchers.IO) {
-            runCatching { conversations.save(snapshot) }.onFailure { Log.w(TAG, "Could not save the conversation", it) }
+            runCatching { conversations.save(snapshot) }.onFailure { Log.w(TAG, "Could not save chats", it) }
         }
     }
 
     /** Drops whatever has passed its 24 hours, from the screen and from the model's memory. */
     private fun dropExpired() {
-        val current = ConversationStore.Snapshot(_uiState.value.messages, sharedDocuments.toList())
-        val kept = conversations.prune(current)
-        if (kept.messages.size == current.messages.size && kept.documents.size == current.documents.size) return
-
-        sharedDocuments.clear()
-        sharedDocuments.addAll(kept.documents)
-        client?.restoreConversation(kept.messages, kept.documents.map { it.name to it.text })
-        _uiState.update {
-            it.copy(
-                messages = kept.messages,
-                nextExpiry = kept.nextExpiry(),
-                viewingConversation = it.viewingConversation && kept.messages.isNotEmpty(),
-            )
+        val kept = conversations.prune(chats)
+        val unchanged = kept.size == chats.size && kept.all { k ->
+            val before = chats.firstOrNull { it.id == k.id }
+            before != null && before.messages.size == k.messages.size && before.documents.size == k.documents.size
         }
+        if (unchanged) return
+
+        val activeBefore = activeChat()
+        chats = kept
+        val activeAfter = activeChat()
+        if (activeAfter == null) {
+            activeChatId = null
+        } else if (activeAfter != activeBefore) {
+            client?.restoreConversation(activeAfter.messages, activeAfter.documents.map { it.name to it.text })
+        }
+        publish()
         persist()
     }
 

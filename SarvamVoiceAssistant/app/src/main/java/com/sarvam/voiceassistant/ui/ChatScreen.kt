@@ -81,10 +81,12 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import com.sarvam.voiceassistant.AppLock
+import com.sarvam.voiceassistant.ChatSummary
 import com.sarvam.voiceassistant.ChatViewModel
 import com.sarvam.voiceassistant.ConversationStore
 import com.sarvam.voiceassistant.Language
@@ -221,7 +223,8 @@ fun ChatScreen(
         onAsk = { prompt -> viewModel.sendText(prompt, "en-IN") },
         onOpenSettings = { showSettings = true },
         onClearConversation = viewModel::clearConversation,
-        onShowConversation = viewModel::showConversation,
+        onBackToStart = viewModel::leaveChat,
+        onOpenChat = viewModel::openChat,
         snackbarHostState = snackbarHostState,
     )
 }
@@ -244,7 +247,8 @@ internal fun ChatContent(
     onAsk: (String) -> Unit,
     onOpenSettings: () -> Unit,
     onClearConversation: () -> Unit,
-    onShowConversation: (Boolean) -> Unit,
+    onBackToStart: () -> Unit,
+    onOpenChat: (String) -> Unit,
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
     animateGreeting: Boolean = true,
 ) {
@@ -252,7 +256,7 @@ internal fun ChatContent(
 
     // Back from a chat returns to the welcome page instead of closing the app; the chat is
     // kept and reachable from there. Back from the welcome page leaves as usual.
-    BackHandler(enabled = conversation) { onShowConversation(false) }
+    BackHandler(enabled = conversation) { onBackToStart() }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -264,7 +268,7 @@ internal fun ChatContent(
                 ),
                 navigationIcon = {
                     if (conversation) {
-                        IconButton(onClick = { onShowConversation(false) }) {
+                        IconButton(onClick = onBackToStart) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to the start")
                         }
                     }
@@ -317,9 +321,8 @@ internal fun ChatContent(
                 WelcomeScreen(
                     hasApiKey = state.hasApiKey,
                     busy = state.isBusy,
-                    savedMessages = state.messages.size,
-                    nextExpiry = state.nextExpiry,
-                    onContinue = { onShowConversation(true) },
+                    chats = state.chats,
+                    onOpenChat = onOpenChat,
                     onOpenSettings = onOpenSettings,
                     onAsk = onAsk,
                     onReadDocument = onAttach,
@@ -347,9 +350,8 @@ private val examples = listOf(
 private fun WelcomeScreen(
     hasApiKey: Boolean,
     busy: Boolean,
-    savedMessages: Int,
-    nextExpiry: Long?,
-    onContinue: () -> Unit,
+    chats: List<ChatSummary>,
+    onOpenChat: (String) -> Unit,
     onOpenSettings: () -> Unit,
     onAsk: (String) -> Unit,
     onReadDocument: () -> Unit,
@@ -404,9 +406,19 @@ private fun WelcomeScreen(
             return@Column
         }
 
-        if (savedMessages > 0) {
-            ContinueCard(savedMessages, nextExpiry, onContinue)
-            Spacer(Modifier.height(18.dp))
+        if (chats.isNotEmpty()) {
+            Text("RECENT CHATS", style = overline, modifier = Modifier.fillMaxWidth())
+            Spacer(Modifier.height(8.dp))
+            chats.forEach { chat ->
+                RecentChatRow(chat, enabled = !busy, onClick = { onOpenChat(chat.id) })
+                Spacer(Modifier.height(8.dp))
+            }
+            Text(
+                "Ask anything below to start a new chat. Chats disappear 24 hours after each message.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.fillMaxWidth().padding(top = 2.dp, bottom = 18.dp),
+            )
         }
 
         Text("TRY ONE", style = overline, modifier = Modifier.fillMaxWidth())
@@ -473,33 +485,40 @@ private fun WelcomeScreen(
     }
 }
 
-/** Back to the conversation, with how long before it starts to disappear. */
+/** One recent chat: what it was about, how recent, and when it starts to disappear. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ContinueCard(messages: Int, nextExpiry: Long?, onContinue: () -> Unit) {
+private fun RecentChatRow(chat: ChatSummary, enabled: Boolean, onClick: () -> Unit) {
     Card(
-        onClick = onContinue,
+        onClick = onClick,
+        enabled = enabled,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
         shape = MaterialTheme.shapes.large,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp),
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            LogoMark(size = 40.dp)
-            Spacer(Modifier.width(14.dp))
+            LogoMark(size = 36.dp)
+            Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(
-                    "Continue your conversation",
+                    chat.title,
                     style = MaterialTheme.typography.titleSmall,
                     color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
+                val now = System.currentTimeMillis()
                 Text(
-                    text = "$messages message${if (messages == 1) "" else "s"}" +
-                        (expiryText(nextExpiry)?.let { " · first disappears in $it" } ?: ""),
+                    text = "${chat.messageCount} message${if (chat.messageCount == 1) "" else "s"} · " +
+                        ConversationStore.describeAgo(now - chat.lastActivity) +
+                        (expiryText(chat.nextExpiry)?.let { " · disappears in $it" } ?: ""),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.75f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
             Icon(

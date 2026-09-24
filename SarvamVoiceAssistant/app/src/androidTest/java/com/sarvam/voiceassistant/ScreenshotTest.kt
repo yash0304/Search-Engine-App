@@ -79,10 +79,28 @@ class ScreenshotTest {
         chat(inConversation(conversation.take(2)).copy(stage = Stage.RECORDING), amplitude = 0.7f)
     }
 
-    /** After Back: the welcome page, with the saved chat one tap away. */
+    /** After Back: the welcome page, listing the day's separate chats. */
     @Test
-    fun welcomeWithSavedChat() = shoot("9_welcome_continue") {
-        chat(inConversation(conversation).copy(viewingConversation = false))
+    fun welcomeWithRecentChats() = shoot("9_welcome_recent_chats") {
+        val now = System.currentTimeMillis()
+        val hour = 60 * 60 * 1000L
+        fun summary(id: String, title: String, count: Int, hoursAgo: Long, startedHoursAgo: Long) = ChatSummary(
+            id = id,
+            title = title,
+            messageCount = count,
+            lastActivity = now - hoursAgo * hour,
+            nextExpiry = now - startedHoursAgo * hour + ConversationStore.LIFETIME_MS,
+        )
+        chat(
+            UiState(
+                hasApiKey = true,
+                chats = listOf(
+                    summary("a", "Tell me more about vermicelli pasta", 4, 0, 1),
+                    summary("b", "Read: IMG_20260924_0912.jpg", 6, 3, 5),
+                    summary("c", "શું વડોદરા જતાં રસ્તામાં વરસાદ છે?", 2, 9, 9),
+                ),
+            ),
+        )
     }
 
     /** The launcher icon as the home screen draws it: ink background, the mark on top. */
@@ -160,7 +178,8 @@ class ScreenshotTest {
             onAsk = {},
             onOpenSettings = {},
             onClearConversation = {},
-            onShowConversation = {},
+            onBackToStart = {},
+            onOpenChat = {},
             animateGreeting = false,
         )
     }

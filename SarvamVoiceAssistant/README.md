@@ -154,6 +154,17 @@ included rather than shipped in a state that would disappoint.
 The WordNet licence requires its notice to travel with the data; it is in
 `app/src/main/assets/WORDNET_LICENSE.txt`.
 
+## Chats
+
+- **Separate chats.** Asking anything from the first page starts a new chat; the first page
+  lists the day's chats, and tapping one continues it with its own messages, documents and
+  memory. A photo shared in one chat is never context for another.
+- **Back** from a chat returns to the first page; Back from there leaves the app.
+- **Gone after 24 hours**, like Snapchat: each message disappears 24 hours after it was sent,
+  along with the text of any document shared into that chat, and a chat goes with its last
+  message. The trash button deletes the open chat straight away.
+- Stored only on the phone, in the app's private storage; backup is disabled.
+
 ## Streaming speech
 
 On by default (**Settings → Speech → Streaming speech**).
