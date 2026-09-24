@@ -30,6 +30,8 @@ class ConversationStore(
         val createdAt: Long,
         val messages: List<Message> = emptyList(),
         val documents: List<SavedDocument> = emptyList(),
+        /** True once the model has written this chat's one-line title; it is asked only once. */
+        val autoTitled: Boolean = false,
     ) {
         val lastActivity: Long get() = messages.maxOfOrNull { it.sentAt } ?: createdAt
 
@@ -102,6 +104,7 @@ class ConversationStore(
                         .put("id", chat.id)
                         .put("title", chat.title)
                         .put("createdAt", chat.createdAt)
+                        .put("autoTitled", chat.autoTitled)
                         .put("messages", encodeMessages(chat.messages))
                         .put("documents", encodeDocuments(chat.documents)),
                 )
@@ -135,6 +138,7 @@ class ConversationStore(
                             createdAt = item.optLong("createdAt", messages.firstOrNull()?.sentAt ?: 0L),
                             messages = messages,
                             documents = decodeDocuments(item.optJSONArray("documents")),
+                            autoTitled = item.optBoolean("autoTitled", false),
                         ),
                     )
                 }

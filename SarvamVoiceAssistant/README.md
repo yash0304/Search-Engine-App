@@ -159,6 +159,11 @@ The WordNet licence requires its notice to travel with the data; it is in
 - **Separate chats.** Asking anything from the first page starts a new chat; the first page
   lists the day's chats, and tapping one continues it with its own messages, documents and
   memory. A photo shared in one chat is never context for another.
+- **One-line titles**, like ChatGPT's: after a chat's first question and answer the model
+  names it in a few words, in the chat's language ("Vermicelli pasta basics"); a chat that
+  began with a photo is named after what the document says. One small request per chat, in
+  the background; if it fails the chat keeps its first question as its name.
+- **No limit on the number of chats** — only the 24-hour rule, so the list is only ever today.
 - **Back** from a chat returns to the first page; Back from there leaves the app.
 - **Gone after 24 hours**, like Snapchat: each message disappears 24 hours after it was sent,
   along with the text of any document shared into that chat, and a chat goes with its last

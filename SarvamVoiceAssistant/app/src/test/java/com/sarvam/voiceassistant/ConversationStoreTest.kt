@@ -46,6 +46,18 @@ class ConversationStoreTest {
     }
 
     @Test
+    fun aGeneratedTitleIsKeptAndNotAskedForAgain() {
+        val titled = chat("a", message("Tell me more about vermicelli pasta", 1.0))
+            .copy(title = "Vermicelli pasta basics", autoTitled = true)
+        store().save(listOf(titled, chat("b", message("hi", 0.5))))
+
+        val loaded = store().load()
+        assertEquals("Vermicelli pasta basics", loaded.single { it.id == "a" }.title)
+        assertTrue(loaded.single { it.id == "a" }.autoTitled)
+        assertFalse(loaded.single { it.id == "b" }.autoTitled)
+    }
+
+    @Test
     fun mostRecentlyActiveChatComesFirst() {
         store().save(listOf(chat("old", message("x", 5.0)), chat("new", message("y", 0.5))))
         assertEquals(listOf("new", "old"), store().load().map { it.id })

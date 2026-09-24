@@ -92,6 +92,9 @@ class SarvamClient(private val apiKey: String) {
         /** Headroom in case a deployment ignores `reasoning_effort` and thinks anyway. */
         private const val MAX_TOKENS = 800
 
+        /** A title is a few words; this also caps what a runaway reply could cost. */
+        private const val TITLE_TOKENS = 40
+
         const val TOOL_SEARCH = "web_search"
         const val TOOL_WEATHER = "get_weather"
         const val TOOL_RAIN_ROUTE = "rain_on_route"
@@ -511,9 +514,13 @@ class SarvamClient(private val apiKey: String) {
     private data class Completion(val message: JSONObject, val finishReason: String)
 
     /** One round trip to the chat endpoint, including recovery from a retired model. */
-    private suspend fun requestCompletion(messages: JSONArray): Completion {
+    private suspend fun requestCompletion(
+        messages: JSONArray,
+        withTools: Boolean = true,
+        maxTokens: Int = MAX_TOKENS,
+    ): Completion {
         var model = resolveChatModel()
-        var result = sendChat(model, messages)
+        var result = sendChat(model, messages, withTools, maxTokens)
 
         if (!result.success && isModelRejected(result)) {
             // The model went away underneath us. Take the replacement the error names,
@@ -525,7 +532,7 @@ class SarvamClient(private val apiKey: String) {
             if (retryModel != null) {
                 model = retryModel
                 resolvedChatModel = retryModel
-                result = sendChat(model, messages)
+                result = sendChat(model, messages, withTools, maxTokens)
             }
         }
 
@@ -566,19 +573,19 @@ class SarvamClient(private val apiKey: String) {
         )
     }
 
-    private fun sendChat(model: String, messages: JSONArray): HttpResult {
+    private fun sendChat(model: String, messages: JSONArray, withTools: Boolean, maxTokens: Int): HttpResult {
         val payload = JSONObject()
             .put("model", model)
             .put("messages", messages)
             .put("temperature", 0.7)
-            .put("max_tokens", MAX_TOKENS)
+            .put("max_tokens", maxTokens)
             // Thinking is on by default on sarvam-30b/105b and its tokens are billed as
             // completion tokens. A spoken two-sentence reply needs no chain-of-thought, and
             // with a small budget the reasoning consumes everything — leaving content null,
             // finish_reason "length", and only reasoning_content populated.
             // JSONObject.NULL is required: put(key, null) would drop the field entirely.
             .put("reasoning_effort", JSONObject.NULL)
-            .apply { if (webSearchEnabled) put("tools", toolSchemas()) }
+            .apply { if (withTools && webSearchEnabled) put("tools", toolSchemas()) }
 
         return sendAuthenticated { builder ->
             builder.url("$BASE_URL/v1/chat/completions")
@@ -656,6 +663,21 @@ class SarvamClient(private val apiKey: String) {
             model = TTS_MODEL,
             sink = sink,
         )
+
+    /**
+     * A one-line title for a chat, from [material] (see [ChatTitles]). Separate from the
+     * conversation — no history, no tools — so it cannot disturb the chat's memory.
+     *
+     * @return null on any failure; the chat then keeps the name it already has.
+     */
+    suspend fun suggestTitle(material: String): String? = withContext(Dispatchers.IO) {
+        val messages = JSONArray()
+            .put(JSONObject().put("role", "system").put("content", ChatTitles.INSTRUCTION))
+            .put(JSONObject().put("role", "user").put("content", material))
+        runCatching {
+            ChatTitles.clean(requestCompletion(messages, withTools = false, maxTokens = TITLE_TOKENS).message.stringOrNull("content"))
+        }.getOrNull()
+    }
 
     // ── 4. Translation and scripts ───────────────────────────────────────
 

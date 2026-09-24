@@ -95,9 +95,9 @@ class ScreenshotTest {
             UiState(
                 hasApiKey = true,
                 chats = listOf(
-                    summary("a", "Tell me more about vermicelli pasta", 4, 0, 1),
-                    summary("b", "Read: IMG_20260924_0912.jpg", 6, 3, 5),
-                    summary("c", "શું વડોદરા જતાં રસ્તામાં વરસાદ છે?", 2, 9, 9),
+                    summary("a", "Vermicelli pasta basics", 4, 0, 1),
+                    summary("b", "Electricity bill, August 2026", 6, 3, 5),
+                    summary("c", "વડોદરા રસ્તે વરસાદ", 2, 9, 9),
                 ),
             ),
         )

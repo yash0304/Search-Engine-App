@@ -438,6 +438,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
         _uiState.update { it.copy(searchQuery = null) }
         addMessage(Message(Role.ASSISTANT, reply, languageCode), chatId)
+        titleAfterFirstExchange(api, chatId, prompt, reply)
 
         setStage(Stage.SPEAKING)
         // Speak in the language the reply is written in, which is not always the question's.
@@ -517,6 +518,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     ),
                     chatId,
                 )
+                // A chat that began with this document is named after what it says.
+                if (chats.firstOrNull { it.id == chatId }?.messages?.size == 1) {
+                    nameChat(api, chatId, ChatTitles.forDocument(prepared.name, text))
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -566,6 +571,28 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         publish()
         persist()
         return id
+    }
+
+    /** Names a chat after its first question and answer, once. */
+    private fun titleAfterFirstExchange(api: SarvamClient, chatId: String, question: String, reply: String) {
+        val chat = chats.firstOrNull { it.id == chatId } ?: return
+        if (chat.autoTitled || chat.messages.size != 2) return
+        nameChat(api, chatId, ChatTitles.forExchange(question, reply))
+    }
+
+    /**
+     * Asks the model for a one-line title in the background, so it never delays speaking the
+     * reply. On failure the chat simply keeps its current name.
+     */
+    private fun nameChat(api: SarvamClient, chatId: String, material: String) {
+        // Marked first, so a second trigger while this is in flight does not ask again.
+        chats = chats.map { if (it.id == chatId) it.copy(autoTitled = true) else it }
+        viewModelScope.launch {
+            val title = api.suggestTitle(material) ?: return@launch
+            chats = chats.map { if (it.id == chatId) it.copy(title = title) else it }
+            publish()
+            persist()
+        }
     }
 
     /** Saves every chat off the main thread; the store writes atomically. */
