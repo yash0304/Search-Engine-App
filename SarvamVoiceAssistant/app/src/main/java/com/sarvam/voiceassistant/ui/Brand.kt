@@ -12,6 +12,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -90,12 +91,18 @@ fun Waveform(
     }
 }
 
-/** "बो" — the assistant's mark, used as its avatar and on the lock screen. */
+/**
+ * "बो" — the assistant's mark, used as its avatar and on the lock screen.
+ *
+ * @param ring outlines the circle; needed where the background is itself ink, or the circle
+ *   disappears into it.
+ */
 @Composable
-fun Monogram(size: Dp, modifier: Modifier = Modifier) {
+fun Monogram(size: Dp, modifier: Modifier = Modifier, ring: Color? = null) {
     Surface(
         shape = CircleShape,
         color = BoliyanColors.Ink,
+        border = ring?.let { BorderStroke((size.value / 26).dp, it) },
         modifier = modifier.size(size),
     ) {
         Box(contentAlignment = Alignment.Center) {

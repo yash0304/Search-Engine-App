@@ -73,6 +73,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
@@ -338,15 +339,14 @@ private fun WelcomeScreen(
             .padding(horizontal = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Spacer(Modifier.height(8.dp))
         CyclingGreeting(animate = animateGreeting)
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(14.dp))
         Waveform(
             modifier = Modifier
                 .fillMaxWidth(0.7f)
-                .height(36.dp),
+                .height(32.dp),
         )
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(14.dp))
         Text(
             text = "Boliyan",
             style = MaterialTheme.typography.headlineMedium,
@@ -357,7 +357,7 @@ private fun WelcomeScreen(
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
-            modifier = Modifier.padding(top = 4.dp, bottom = 24.dp),
+            modifier = Modifier.padding(top = 4.dp, bottom = 18.dp),
         )
 
         if (!hasApiKey) {
@@ -366,7 +366,7 @@ private fun WelcomeScreen(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Column(Modifier.padding(20.dp)) {
-                    Text("One step first", style = overline)
+                    Text("ONE STEP FIRST", style = overline)
                     Spacer(Modifier.height(6.dp))
                     Text(
                         "Add your Sarvam API key. It is stored encrypted and never shown again.",
@@ -400,14 +400,20 @@ private fun WelcomeScreen(
         }
 
         // The document reader is the one example that is an action, not a question, so it
-        // gets the ink card that reads as a button.
+        // gets the ink card that reads as a button. On the dark theme's ink background plain
+        // ink would vanish, so it lifts to a lighter indigo there.
+        val cardInk = if (MaterialTheme.colorScheme.background.luminance() < 0.5f) {
+            MaterialTheme.colorScheme.primaryContainer
+        } else {
+            BoliyanColors.Ink
+        }
         Card(
             onClick = onReadDocument,
             enabled = !busy,
             colors = CardDefaults.cardColors(
-                containerColor = BoliyanColors.Ink,
+                containerColor = cardInk,
                 contentColor = Color.White,
-                disabledContainerColor = BoliyanColors.Ink.copy(alpha = 0.5f),
+                disabledContainerColor = cardInk.copy(alpha = 0.5f),
             ),
             shape = MaterialTheme.shapes.large,
             modifier = Modifier.fillMaxWidth(),
@@ -453,25 +459,25 @@ private fun ExampleTile(
         enabled = enabled,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
         shape = MaterialTheme.shapes.large,
-        modifier = modifier.height(148.dp),
+        modifier = modifier.height(124.dp),
     ) {
-        Column(Modifier.padding(16.dp)) {
+        Column(Modifier.padding(14.dp)) {
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
-                    .size(36.dp)
+                    .size(32.dp)
                     .background(accent.copy(alpha = 0.18f), CircleShape),
             ) {
                 Icon(example.icon, contentDescription = null, tint = accent, modifier = Modifier.size(20.dp))
             }
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(10.dp))
             Text(example.title, style = MaterialTheme.typography.titleSmall)
             Spacer(Modifier.height(4.dp))
             Text(
                 text = "“${example.prompt}”",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 3,
+                maxLines = 2,
             )
         }
     }
@@ -686,7 +692,8 @@ private fun MicButton(stage: Stage, amplitude: Float, enabled: Boolean, onClick:
     val recording = stage == Stage.RECORDING
     // A halo that swells with the microphone level, so it is obvious it is hearing you.
     val halo by animateFloatAsState(
-        targetValue = if (recording) 1.15f + amplitude * 0.45f else 1f,
+        // Capped so the halo stays inside the bar's 12 dp margin instead of clipping at the edge.
+        targetValue = if (recording) 1.1f + amplitude * 0.25f else 1f,
         label = "micHalo",
     )
     val fill = if (recording) BoliyanColors.Vermilion else BoliyanColors.Marigold
