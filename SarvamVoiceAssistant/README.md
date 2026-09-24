@@ -104,17 +104,18 @@ what happened last week — and will happily invent an answer. Two things addres
 
 - **The date is injected** into the system prompt on every turn, so it always knows what
   today is rather than guessing from training data.
-- **Web search is offered as a tool.** The model calls it only when it decides it needs
-  current information, using DuckDuckGo's Instant Answer API and Wikipedia — both keyless,
-  so nothing extra needs configuring. The status line shows what it is searching for.
+- **Web search is offered as a tool.** The model calls it when it needs current
+  information. It searches **Google News** (India edition) for recent headlines, plus
+  DuckDuckGo's Instant Answer API and Wikipedia for settled facts — all keyless, so nothing
+  extra needs configuring. The status line shows what it is searching for.
 
 Turn it off in **Settings → Look things up** if you would rather have faster answers from
 the model's own knowledge.
 
-What this does *not* give you is a news feed. Wikipedia and DuckDuckGo are strong on
-established facts and reasonably current on notable events, but they will not have this
-morning's headlines, live scores or market prices. For those you would need a dedicated
-provider per category, each with its own API key.
+Headlines are what it gets from news, not full articles, so it can tell you that a bank
+changed its ATM charges and roughly when, but a detailed fee table may still need the
+bank's own page. When a search finds nothing on the exact point, the assistant is told to
+share what it knows and how current that is, rather than only pointing you elsewhere.
 
 Search failures never break a turn — the model is told the lookup failed and answers anyway.
 

@@ -14,12 +14,13 @@ import org.json.JSONObject
  * Looks facts up on the open web so the assistant can answer about things that happened
  * after the model was trained.
  *
- * Uses two keyless sources so nothing extra has to be configured:
+ * Uses three keyless sources so nothing extra has to be configured:
+ *  - Google News RSS search (India edition), for anything recent — see [NewsFeed]
  *  - DuckDuckGo's Instant Answer API, good for definitions and direct answers
  *  - Wikipedia search plus article summary, good for people, places and events
  *
- * Neither is a breaking-news feed. They are strong on established facts and reasonably
- * current on notable events, but they will not have this morning's headlines.
+ * News comes first: it is the only one of the three that knows what happened this week,
+ * and without it a question like "latest HDFC ATM charges" found nothing at all.
  */
 class WebSearch {
 
@@ -45,6 +46,11 @@ class WebSearch {
         if (trimmed.isEmpty()) return@withContext "No results found."
 
         val results = buildList {
+            runCatching { NewsFeed.toResults(NewsFeed.parse(get(NewsFeed.url(trimmed), accept = "application/rss+xml"))) }
+                .onFailure { Log.w(TAG, "News lookup failed", it) }
+                .getOrDefault(emptyList())
+                .forEach(::add)
+
             runCatching { instantAnswer(trimmed) }
                 .onFailure { Log.w(TAG, "Instant answer failed", it) }
                 .getOrNull()
@@ -118,11 +124,11 @@ class WebSearch {
 
     private fun encode(value: String): String = URLEncoder.encode(value, "UTF-8")
 
-    private fun get(url: String): String {
+    private fun get(url: String, accept: String = "application/json"): String {
         val request = Request.Builder()
             .url(url)
             .addHeader("User-Agent", USER_AGENT)
-            .addHeader("Accept", "application/json")
+            .addHeader("Accept", accept)
             .get()
             .build()
 

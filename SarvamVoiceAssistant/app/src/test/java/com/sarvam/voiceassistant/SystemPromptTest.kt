@@ -31,6 +31,13 @@ class SystemPromptTest {
     }
 
     @Test
+    fun `an empty search still gets a helpful answer`() {
+        // Asked for the latest HDFC ATM charges, it replied only "check HDFC's website".
+        val prompt = SystemPrompt.build(moment)
+        assertTrue(prompt.contains("still help: say what you know"))
+    }
+
+    @Test
     fun `shared documents are scoped to questions about them`() {
         // Unscoped, a document shared into the chat made every later answer come "from it".
         assertTrue(SystemPrompt.build(moment).contains("Use it only for\nquestions about that document"))

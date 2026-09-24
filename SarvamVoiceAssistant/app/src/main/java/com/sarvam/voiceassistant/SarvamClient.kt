@@ -406,8 +406,9 @@ class SarvamClient(private val apiKey: String) {
             .put(
                 tool(
                     name = TOOL_SEARCH,
-                    description = "Look up current information on the web. Use this for anything " +
-                        "that happened recently, for facts that change over time, or whenever you " +
+                    description = "Look up current information on the web, including recent Indian " +
+                        "news headlines. Use this for news, prices, fees, rules and rates that " +
+                        "change, anything that happened recently, or whenever you " +
                         "would otherwise say you do not know — search instead of offering to. Do " +
                         "NOT use it for greetings, chit-chat, opinions, translation, arithmetic, " +
                         "weather, or general knowledge you already have.",
