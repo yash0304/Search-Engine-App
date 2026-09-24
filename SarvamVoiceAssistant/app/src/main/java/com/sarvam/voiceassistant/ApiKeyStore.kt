@@ -58,6 +58,26 @@ class ApiKeyStore(context: Context) {
         get() = readBoolean(KEY_LOCK, true)
         set(value) = write { putBoolean(KEY_LOCK, value) }
 
+    /** Speech over WebSockets: replies start sooner. Off falls back to plain requests. */
+    var streamingEnabled: Boolean
+        get() = readBoolean(KEY_STREAMING, true)
+        set(value) = write { putBoolean(KEY_STREAMING, value) }
+
+    /** End the turn when the server hears you stop talking, instead of waiting for a tap. */
+    var autoStopListening: Boolean
+        get() = readBoolean(KEY_AUTO_STOP, true)
+        set(value) = write { putBoolean(KEY_AUTO_STOP, value) }
+
+    /** What speech-to-text produces; one of [SpeechOptions.MODES]. */
+    var sttMode: String
+        get() = readString(KEY_STT_MODE, SpeechOptions.DEFAULT_MODE).let(SpeechOptions::validMode)
+        set(value) = write { putString(KEY_STT_MODE, SpeechOptions.validMode(value)) }
+
+    /** One of [SpeechOptions.STT_MODELS]. */
+    var sttModel: String
+        get() = readString(KEY_STT_MODEL, SpeechOptions.DEFAULT_STT_MODEL).let(SpeechOptions::validModel)
+        set(value) = write { putString(KEY_STT_MODEL, SpeechOptions.validModel(value)) }
+
     /**
      * A safe stand-in for the key, e.g. `sk_••••••7f3a`. The full key is never handed to the
      * UI — showing it in Settings meant anyone holding the phone could read it.
@@ -107,6 +127,10 @@ class ApiKeyStore(context: Context) {
         const val KEY_LOCK = "lock_enabled"
         const val KEY_WEB_SEARCH = "web_search_enabled"
         const val KEY_LOCATION = "location_enabled"
+        const val KEY_STREAMING = "streaming_enabled"
+        const val KEY_AUTO_STOP = "auto_stop_listening"
+        const val KEY_STT_MODE = "stt_mode"
+        const val KEY_STT_MODEL = "stt_model"
 
         fun encrypted(context: Context): SharedPreferences {
             val masterKey = MasterKey.Builder(context)

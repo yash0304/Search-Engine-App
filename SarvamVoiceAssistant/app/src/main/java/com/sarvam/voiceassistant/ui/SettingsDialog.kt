@@ -35,9 +35,18 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.sarvam.voiceassistant.BuildConfig
+import com.sarvam.voiceassistant.SpeechOptions
 import com.sarvam.voiceassistant.Voices
 
 private const val AUTOMATIC = ""
+
+/** The speech choices Settings edits as one unit. */
+data class SpeechSettings(
+    val streaming: Boolean,
+    val autoStop: Boolean,
+    val sttMode: String,
+    val sttModel: String,
+)
 
 /**
  * @param maskedKey a redacted stand-in for the saved key. The real key is never passed in,
@@ -59,7 +68,17 @@ fun SettingsDialog(
     locationEnabled: Boolean,
     dictionaryStatus: String,
     onRebuildDictionary: () -> Unit,
-    onSave: (apiKey: String, speaker: String, model: String, lock: Boolean, webSearch: Boolean, location: Boolean) -> Unit,
+    speech: SpeechSettings,
+    speechDiagnostics: String,
+    onSave: (
+        apiKey: String,
+        speaker: String,
+        model: String,
+        lock: Boolean,
+        webSearch: Boolean,
+        location: Boolean,
+        speech: SpeechSettings,
+    ) -> Unit,
     onClearKey: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -70,6 +89,7 @@ fun SettingsDialog(
     var webSearch by remember { mutableStateOf(webSearchEnabled) }
     var useLocation by remember { mutableStateOf(locationEnabled) }
     var keyVisible by remember { mutableStateOf(false) }
+    var speechChoice by remember { mutableStateOf(speech) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -158,6 +178,49 @@ fun SettingsDialog(
                 )
 
                 Spacer(Modifier.height(20.dp))
+                Text("Speech", style = MaterialTheme.typography.titleSmall)
+                Spacer(Modifier.height(8.dp))
+                ToggleRow(
+                    title = "Streaming speech",
+                    hint = "Replies start playing after the first phrase, and your words are " +
+                        "transcribed while you talk. Falls back automatically if it fails.",
+                    checked = speechChoice.streaming,
+                    enabled = true,
+                    onCheckedChange = { speechChoice = speechChoice.copy(streaming = it) },
+                )
+                Spacer(Modifier.height(12.dp))
+                ToggleRow(
+                    title = "Stop listening when I pause",
+                    hint = "Ends your turn when you stop talking, without a second tap. " +
+                        "Needs streaming speech.",
+                    checked = speechChoice.autoStop && speechChoice.streaming,
+                    enabled = speechChoice.streaming,
+                    onCheckedChange = { speechChoice = speechChoice.copy(autoStop = it) },
+                )
+                Spacer(Modifier.height(12.dp))
+                ChoiceSection(
+                    title = "What to do with what I say",
+                    hint = SpeechOptions.MODES.first { it.value == speechChoice.sttMode }.example,
+                    selected = speechChoice.sttMode,
+                    options = SpeechOptions.MODES.map { it.value to it.label },
+                    onSelect = { speechChoice = speechChoice.copy(sttMode = it) },
+                )
+                Spacer(Modifier.height(12.dp))
+                ChoiceSection(
+                    title = "Speech recognition model",
+                    hint = "saaras:v4 is Sarvam's newest; v3 is the proven default.",
+                    selected = speechChoice.sttModel,
+                    options = SpeechOptions.STT_MODELS.map { it to it },
+                    onSelect = { speechChoice = speechChoice.copy(sttModel = it) },
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = speechDiagnostics,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                Spacer(Modifier.height(20.dp))
                 Text("Offline dictionary", style = MaterialTheme.typography.titleSmall)
                 Spacer(Modifier.height(4.dp))
                 Text(
@@ -207,7 +270,7 @@ fun SettingsDialog(
         },
         confirmButton = {
             TextButton(
-                onClick = { onSave(apiKey.trim(), speaker, model, lock, webSearch, useLocation) },
+                onClick = { onSave(apiKey.trim(), speaker, model, lock, webSearch, useLocation, speechChoice) },
                 // With no key saved yet, one must be entered before anything can work.
                 enabled = hasSavedKey || apiKey.isNotBlank(),
             ) {
@@ -287,6 +350,44 @@ private fun SettingSection(
                     text = { Text(option) },
                     onClick = {
                         onSelect(option)
+                        menuOpen = false
+                    },
+                )
+            }
+        }
+    }
+}
+
+/** A dropdown over fixed labelled values, with no "Automatic" entry. */
+@Composable
+private fun ChoiceSection(
+    title: String,
+    hint: String,
+    selected: String,
+    options: List<Pair<String, String>>,
+    onSelect: (String) -> Unit,
+) {
+    var menuOpen by remember { mutableStateOf(false) }
+
+    Text(title, style = MaterialTheme.typography.titleSmall)
+    Spacer(Modifier.height(4.dp))
+    Text(
+        text = hint,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Spacer(Modifier.height(8.dp))
+
+    Box {
+        OutlinedButton(onClick = { menuOpen = true }, modifier = Modifier.fillMaxWidth()) {
+            Text(options.firstOrNull { it.first == selected }?.second ?: selected)
+        }
+        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+            options.forEach { (value, label) ->
+                DropdownMenuItem(
+                    text = { Text(label) },
+                    onClick = {
+                        onSelect(value)
                         menuOpen = false
                     },
                 )

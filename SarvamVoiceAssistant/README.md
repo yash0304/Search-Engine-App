@@ -1,13 +1,16 @@
 # Sarvam Voice Assistant (Android)
 
-A trilingual (Gujarati · Hindi · English) push-to-talk voice assistant, built on Sarvam AI's
-REST APIs. Native Kotlin, Jetpack Compose, Material 3.
+A voice assistant for Gujarati, Hindi, English and the other Indian languages, built on
+Sarvam AI's APIs. Native Kotlin, Jetpack Compose, Material 3.
 
 ```
-🎤 Mic ─▶ saaras:v3 (STT) ─▶ chat LLM (auto-detected) ─▶ bulbul:v3 (TTS) ─▶ 🔊 Speaker
+🎤 Mic ─▶ saaras (live STT) ─▶ chat LLM + tools ─▶ bulbul:v3 (streamed TTS) ─▶ 🔊 Speaker
+                                    │
+        web · weather · rain on route · dictionary · translate · transliterate · documents
 ```
 
 The assistant detects which language you spoke and replies in that same language, out loud.
+It can also translate, rewrite text in another script, and read photos and PDFs.
 
 ## Requirements
 
@@ -46,17 +49,25 @@ the artifact, unzip, and sideload the APK (enable "Install unknown apps" on your
 
 | Control | What it does |
 |---|---|
-| Mic button | Tap to record, tap again to stop and send. Auto-stops at 25 s. |
+| Mic button | Tap to record. Stops by itself when you stop talking (or tap again). Max 25 s. |
+| Paperclip | Pick a photo or PDF; the assistant reads it and you can ask about it. |
 | Language chips | `Auto` lets the model detect the language. Pick one to force it. |
 | Text field | Type instead of speaking; the reply is still spoken aloud. |
-| Settings | API key and voice selection. |
+| Settings | API key, voice, speech options, chat model, and diagnostics. |
 | Trash icon | Clears the conversation and the model's memory of it. |
 
 ## How it is put together
 
 | File | Responsibility |
 |---|---|
-| `SarvamClient.kt` | The three REST calls, error mapping, bounded conversation history |
+| `SarvamClient.kt` | REST calls, the tool loop, error mapping, bounded conversation history |
+| `StreamingSpeech.kt` | WebSocket speech in and out, with fallback signalling |
+| `StreamingProtocol.kt` | Exact WebSocket message formats, from Sarvam's official SDK |
+| `PcmPlayer.kt` | Plays streamed audio chunk by chunk through `AudioTrack` |
+| `TextTools.kt` | Picks the right translation model and builds its requests |
+| `DocumentReader.kt` | The six-step Document Intelligence job |
+| `DocumentInput.kt` | Turns a picked photo into the PDF that job requires |
+| `SpeechOptions.kt` | Speech-to-text modes, and which language to *speak* a reply in |
 | `AudioRecorder.kt` | 16 kHz mono WAV capture, off the main thread, with a live level meter |
 | `AudioPlayer.kt` | Plays the reply and suspends until playback genuinely finishes |
 | `ApiKeyStore.kt` | Encrypted key storage, with a plain-preferences fallback |
@@ -67,10 +78,10 @@ the artifact, unzip, and sideload the APK (enable "Install unknown apps" on your
 
 ## Customising
 
-- **Voice** — pick any of the 39 `bulbul:v3` voices in Settings. Voices are not
+- **Voice** — pick any of the 37 `bulbul:v3` voices in Settings. Voices are not
   language-locked; any voice can speak any supported language. Names are case-sensitive and
   lowercase, and a name outside `Voices.ALL` is rejected by the API with an HTTP 400.
-- **Personality** — edit `SYSTEM_PROMPT` in `SarvamClient.kt`.
+- **Personality** — edit `SystemPrompt.kt`.
 - **Chat model** — not hardcoded. The app queries `GET /v1/models` and picks one your key
   supports; pin a specific model in Settings if you prefer. Sarvam has retired chat models
   repeatedly (`sarvam-m`, then `sarvam-30b`), so anything pinned in code goes stale — see
@@ -136,6 +147,73 @@ included rather than shipped in a state that would disappoint.
 The WordNet licence requires its notice to travel with the data; it is in
 `app/src/main/assets/WORDNET_LICENSE.txt`.
 
+## Streaming speech
+
+On by default (**Settings → Speech → Streaming speech**).
+
+- **Speaking:** the reply goes to `wss://api.sarvam.ai/text-to-speech/ws` and plays as raw
+  PCM through `AudioTrack` from the first synthesised phrase, instead of waiting for the
+  whole reply to be rendered and downloaded.
+- **Listening:** microphone audio streams to `wss://api.sarvam.ai/speech-to-text/ws` while
+  you talk, so the transcript is ready the moment you stop. The server's voice-activity
+  signals end your turn when you stop talking — no second tap. Background noise before you
+  start speaking does not end it.
+
+Every streaming failure falls back to the plain REST endpoints, which is how the app worked
+before. If the reply had already started playing, it stops rather than starting over.
+
+Settings shows how the last turn actually went, e.g. *"heard: streamed; spoke: standard
+(stream: …)"*. The message formats come from Sarvam's official `sarvamai` SDK (v0.1.34) and
+are tested against a local WebSocket server, but that is not the same as Sarvam's live
+service — this line is how to tell whether streaming works on your phone.
+
+### What happens to what you say
+
+**Settings → Speech → What to do with what I say** picks the Saaras mode:
+
+| Mode | Output for "मेरा फोन नंबर है 9840950950" |
+|---|---|
+| Transcribe | मेरा फोन नंबर है 9840950950 |
+| Translate to English | My phone number is 9840950950 |
+| Mixed script | मेरा phone number है 9840950950 |
+| Roman letters | mera phone number hai 9840950950 |
+| Word for word | मेरा फोन नंबर है नौ आठ चार zero… |
+
+The recognition model can be switched between `saaras:v3` (default) and `saaras:v4`.
+
+## Translation and scripts
+
+The model has three Sarvam text tools, and uses them instead of translating from memory:
+
+- **translate_text** — `mayura:v1` for English plus 10 Indian languages, which can detect
+  the source language and has tones (formal, modern-colloquial, classic-colloquial,
+  code-mixed); `sarvam-translate:v1` for all 22 scheduled languages, formal only. The app
+  picks the model from the languages involved.
+- **transliterate_text** — same words, different script: *namaste* ↔ नमस्ते.
+- **detect_language** — which language and script a piece of text is in.
+
+Replies are spoken in the language they are *written* in, detected from the script on the
+device for free. Ask in English for a Gujarati phrase and it is spoken with a Gujarati voice.
+
+## Reading documents
+
+Tap the paperclip and pick a PDF or a photo. The app sends it through Sarvam Document
+Intelligence (Sarvam Vision: 22 Indian languages plus English, tables and layout), then
+keeps the text in the conversation so you can ask about it by voice — summarise it,
+translate it, find a date or an amount in it.
+
+Photos are converted to a one-page PDF on the phone first, because the upload accepts only
+PDF or ZIP. The document's main language is taken from the language chip; with *Auto* it is
+English (the API would otherwise assume Hindi).
+
+## Voice Agents
+
+Sarvam's **Voice Agents** (formerly *Samvaad*) is a hosted product for phone and WhatsApp
+bots, set up on Sarvam's own platform. It has no API in the official SDK, so there is nothing
+for this app to call. What this app does — live speech in, tools, streamed speech out — is
+the same pipeline a voice agent runs, on your own phone. Putting it on a phone number would
+mean Sarvam's enterprise onboarding rather than code here.
+
 ## Model selection
 
 Sarvam retires chat models fairly often, and every retirement breaks clients that pin a
@@ -154,7 +232,9 @@ you have a reason not to — a pinned model is exactly what breaks when Sarvam r
 
 ## Limitations
 
-- Push-to-talk only. Interrupting the assistant mid-sentence (barge-in) needs Sarvam's
-  streaming WebSocket APIs, which this app does not use.
-- One request per turn, so there is a pause between speaking and hearing the reply.
+- No barge-in: you cannot interrupt the assistant by speaking over it. Tap stop instead.
+- The chat model's reply is not streamed, so there is still a short pause while it thinks;
+  streaming starts once the reply text exists.
+- Tools (search, weather, dictionary, translation) are only offered when **Look things up**
+  is on in Settings.
 - The debug APK is signed with the debug keystore — fine for sideloading, not for Play.

@@ -47,11 +47,16 @@ class AudioRecorder(private val outputDir: File) {
     /**
      * Records until [requestStop] is called or [maxMillis] elapses.
      *
+     * @param onChunk receives each block of PCM as it is read, for live transcription. The
+     *   WAV file is written regardless, so a failed stream can still be sent over REST.
      * @throws IllegalStateException if the microphone could not be opened.
      * @return a complete WAV file.
      */
     @SuppressLint("MissingPermission") // Caller checks RECORD_AUDIO before invoking.
-    suspend fun record(maxMillis: Long): File = withContext(Dispatchers.IO) {
+    suspend fun record(
+        maxMillis: Long,
+        onChunk: ((ByteArray, Int) -> Unit)? = null,
+    ): File = withContext(Dispatchers.IO) {
         stopRequested = false
         _amplitude.value = 0f
 
@@ -94,6 +99,8 @@ class AudioRecorder(private val outputDir: File) {
                     if (read <= 0) continue
                     out.write(buffer, 0, read)
                     pcmBytes += read
+                    // A streaming hiccup must never cost the recording itself.
+                    onChunk?.let { runCatching { it(buffer, read) } }
                     _amplitude.value = rms(buffer, read)
                 }
 

@@ -24,6 +24,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Settings
@@ -89,6 +90,11 @@ fun ChatScreen(viewModel: ChatViewModel) {
         ActivityResultContracts.RequestMultiplePermissions(),
     ) { /* Denied simply means location questions ask for a place name. */ }
 
+    // Photos and PDFs for Document Intelligence. OpenDocument needs no storage permission.
+    val documentPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri -> uri?.let(viewModel::readDocument) }
+
     val micPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
@@ -135,7 +141,15 @@ fun ChatScreen(viewModel: ChatViewModel) {
             locationEnabled = state.locationEnabled,
             dictionaryStatus = state.dictionaryStatus,
             onRebuildDictionary = viewModel::rebuildDictionary,
-            onSave = { key, speaker, model, lock, webSearch, useLocation ->
+            speech = SpeechSettings(
+                streaming = state.streamingEnabled,
+                autoStop = state.autoStopListening,
+                sttMode = state.sttMode,
+                sttModel = state.sttModel,
+            ),
+            speechDiagnostics = state.speechDiagnostics,
+            onSave = { key, speaker, model, lock, webSearch, useLocation, speech ->
+                viewModel.setSpeechOptions(speech.streaming, speech.autoStop, speech.sttMode, speech.sttModel)
                 viewModel.saveApiKey(key) // Blank keeps the stored key.
                 viewModel.setSpeaker(speaker)
                 viewModel.setChatModel(model)
@@ -190,6 +204,7 @@ fun ChatScreen(viewModel: ChatViewModel) {
                     draft = ""
                 },
                 onMic = ::requestMic,
+                onAttach = { documentPicker.launch(arrayOf("application/pdf", "image/*")) },
             )
         },
     ) { padding ->
@@ -292,7 +307,8 @@ private fun EmptyState(hasApiKey: Boolean, onOpenSettings: () -> Unit) {
             )
             Spacer(Modifier.height(8.dp))
             Text(
-                text = "The assistant replies in the same language and reads it aloud.",
+                text = "The assistant replies in the same language and reads it aloud. " +
+                    "Tap the paperclip to have it read a photo or PDF.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
@@ -321,6 +337,7 @@ private fun InputBar(
     enabled: Boolean,
     onSend: () -> Unit,
     onMic: () -> Unit,
+    onAttach: () -> Unit,
 ) {
     Surface(tonalElevation = 3.dp) {
         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
@@ -345,6 +362,10 @@ private fun InputBar(
             Spacer(Modifier.height(8.dp))
 
             Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onAttach, enabled = enabled && stage == Stage.IDLE) {
+                    Icon(Icons.Filled.AttachFile, contentDescription = "Read a photo or PDF")
+                }
+
                 OutlinedTextField(
                     value = draft,
                     onValueChange = onDraftChange,
@@ -378,8 +399,9 @@ private fun StatusLine(stage: Stage, searchQuery: String?) {
         Stage.RECORDING -> "Listening…"
         Stage.TRANSCRIBING -> "Transcribing…"
         Stage.THINKING -> "Thinking…"
-        Stage.SEARCHING -> searchQuery?.let { "Searching for \"$it\"…" } ?: "Searching…"
+        Stage.SEARCHING -> searchQuery?.let { "Looking up $it…" } ?: "Looking it up…"
         Stage.SPEAKING -> "Speaking…"
+        Stage.READING -> searchQuery?.let { "$it…" } ?: "Reading the document…"
     }
 
     if (label != null) {

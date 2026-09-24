@@ -15,16 +15,17 @@ import java.io.File
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
-/** An API failure with a message that is safe to show in the UI. */
-class SarvamException(message: String, cause: Throwable? = null) : Exception(message, cause)
-
 /**
  * Thin client over the Sarvam AI REST endpoints this app uses.
  *
- *  STT     POST /speech-to-text       multipart, model `saaras:v3`
+ *  STT     POST /speech-to-text       multipart, saaras:v3 or v4, any mode
  *  LLM     POST /v1/chat/completions  JSON, model discovered at runtime
  *  TTS     POST /text-to-speech       JSON, model `bulbul:v3`
  *  Models  GET  /v1/models            OpenAI-compatible model listing
+ *  Text    POST /translate, /transliterate, /text-lid
+ *
+ * Streaming speech (WebSockets) lives in [StreamingSpeech], exposed as [streaming]; document
+ * reading in [DocumentReader]. Both reuse this client's key and HTTP connection pool.
  *
  * Every call authenticates with the `api-subscription-key` header. The OpenAI-compatible
  * endpoints additionally try `Authorization: Bearer`, falling back to the subscription key
@@ -45,12 +46,19 @@ class SarvamClient(private val apiKey: String) {
         .writeTimeout(90, TimeUnit.SECONDS)
         .build()
 
-    data class Transcription(val transcript: String, val languageCode: String)
-
     private val history = mutableListOf<JSONObject>()
 
     private val webSearch = WebSearch()
     private val weather = WeatherService()
+
+    /** Streaming speech over WebSockets, sharing this client's connection pool. */
+    val streaming = StreamingSpeech(apiKey, client)
+
+    /** Reads photos and PDFs with Sarvam's Document Intelligence. */
+    val documents = DocumentReader(apiKey, client)
+
+    /** Text of documents the user has shared this conversation, newest last. */
+    private val documentContext = mutableListOf<Pair<String, String>>()
 
     /** Supplies the device position for location-aware tools; null when unavailable. */
     @Volatile
@@ -76,8 +84,7 @@ class SarvamClient(private val apiKey: String) {
 
     companion object {
         private const val BASE_URL = "https://api.sarvam.ai"
-        private const val STT_MODEL = "saaras:v3"
-        private const val TTS_MODEL = "bulbul:v3"
+        const val TTS_MODEL = "bulbul:v3"
 
         private const val TTS_CHAR_LIMIT = 1500
         private const val HISTORY_TURNS = 8
@@ -89,6 +96,12 @@ class SarvamClient(private val apiKey: String) {
         const val TOOL_WEATHER = "get_weather"
         const val TOOL_RAIN_ROUTE = "rain_on_route"
         const val TOOL_DEFINE = "define_word"
+        const val TOOL_TRANSLATE = "translate_text"
+        const val TOOL_TRANSLITERATE = "transliterate_text"
+        const val TOOL_DETECT_LANGUAGE = "detect_language"
+
+        /** How much of a shared document is kept in context; roughly 3,000 tokens. */
+        private const val DOCUMENT_CONTEXT_CHARS = 12_000
 
         /** How many times the model may search before it has to answer. */
         private const val MAX_TOOL_ROUNDS = 2
@@ -142,7 +155,12 @@ class SarvamClient(private val apiKey: String) {
 
     // ── 1. Speech to text ────────────────────────────────────────────────
 
-    suspend fun transcribe(audioFile: File, languageCode: String = "unknown"): Transcription =
+    suspend fun transcribe(
+        audioFile: File,
+        languageCode: String = "unknown",
+        model: String = SpeechOptions.DEFAULT_STT_MODEL,
+        mode: String = SpeechOptions.DEFAULT_MODE,
+    ): Transcription =
         withContext(Dispatchers.IO) {
             if (!audioFile.exists() || audioFile.length() <= WAV_HEADER_BYTES) {
                 throw SarvamException("No audio was captured. Hold the button and speak, then release.")
@@ -151,8 +169,8 @@ class SarvamClient(private val apiKey: String) {
             val body = MultipartBody.Builder()
                 .setType(MultipartBody.FORM)
                 .addFormDataPart("file", audioFile.name, audioFile.asRequestBody("audio/wav".toMediaType()))
-                .addFormDataPart("model", STT_MODEL)
-                .addFormDataPart("mode", "transcribe")
+                .addFormDataPart("model", SpeechOptions.validModel(model))
+                .addFormDataPart("mode", SpeechOptions.validMode(mode))
                 .apply { if (languageCode != "unknown") addFormDataPart("language_code", languageCode) }
                 .build()
 
@@ -195,6 +213,7 @@ class SarvamClient(private val apiKey: String) {
         val messages = JSONArray().apply {
             // Rebuilt each turn so the injected date never goes stale mid-session.
             put(JSONObject().put("role", "system").put("content", SystemPrompt.now()))
+            documentPrompt()?.let { put(JSONObject().put("role", "system").put("content", it)) }
             history.takeLast(HISTORY_TURNS).forEach { put(it) }
             // Immediately before the question, so it is the freshest instruction in context.
             definitionContext?.let { put(JSONObject().put("role", "system").put("content", it)) }
@@ -301,6 +320,32 @@ class SarvamClient(private val apiKey: String) {
                     }
                 }
 
+                TOOL_TRANSLATE -> {
+                    val text = arguments.stringOrNull("text")
+                    val target = arguments.stringOrNull("target_language")
+                    if (text == null) "No text was provided." else {
+                        onSearching("a ${target ?: ""} translation")
+                        translate(text, target, arguments.stringOrNull("source_language"), arguments.stringOrNull("tone"))
+                    }
+                }
+
+                TOOL_TRANSLITERATE -> {
+                    val text = arguments.stringOrNull("text")
+                    val target = arguments.stringOrNull("target_script")
+                    if (text == null) "No text was provided." else {
+                        onSearching("${target ?: "the"} script")
+                        transliterate(text, target, arguments.stringOrNull("source_language"))
+                    }
+                }
+
+                TOOL_DETECT_LANGUAGE -> {
+                    val text = arguments.stringOrNull("text")
+                    if (text == null) "No text was provided." else {
+                        onSearching("which language it is")
+                        identifyLanguage(text)
+                    }
+                }
+
                 else -> "Unknown tool: $name"
             }
         }.getOrElse { "That lookup could not be completed: ${it.message}" }
@@ -396,6 +441,56 @@ class SarvamClient(private val apiKey: String) {
                         stringParam("The single English word to look up, without punctuation."),
                     ),
                     required = listOf("word"),
+                ),
+            )
+            .put(
+                tool(
+                    name = TOOL_TRANSLATE,
+                    description = "Translate text with Sarvam's dedicated translation models, which " +
+                        "are more accurate for Indian languages than translating yourself. Use this " +
+                        "whenever the user asks to translate something or asks how to say something " +
+                        "in another language. Supports English and all 22 scheduled Indian languages.",
+                    properties = JSONObject()
+                        .put("text", stringParam("The exact text to translate."))
+                        .put("target_language", stringParam("Language to translate into, e.g. Gujarati."))
+                        .put(
+                            "source_language",
+                            stringParam(
+                                "Language the text is in. Omit to detect it; required for Assamese, " +
+                                    "Urdu, Nepali, Konkani, Kashmiri, Sindhi, Sanskrit, Santali, " +
+                                    "Manipuri, Bodo, Maithili and Dogri.",
+                            ),
+                        )
+                        .put(
+                            "tone",
+                            stringParam(
+                                "formal (default), modern-colloquial for everyday speech, " +
+                                    "classic-colloquial, or code-mixed to keep common English words.",
+                            ),
+                        ),
+                    required = listOf("text", "target_language"),
+                ),
+            )
+            .put(
+                tool(
+                    name = TOOL_TRANSLITERATE,
+                    description = "Rewrite text in a different script without changing the words, " +
+                        "e.g. Hindi in Roman letters or English in Devanagari. Use when the user asks " +
+                        "how something is WRITTEN or spelled in a script, not what it means.",
+                    properties = JSONObject()
+                        .put("text", stringParam("The text to rewrite."))
+                        .put("target_script", stringParam("Language whose script to use, e.g. Hindi or English."))
+                        .put("source_language", stringParam("Language of the text. Omit to detect it.")),
+                    required = listOf("text", "target_script"),
+                ),
+            )
+            .put(
+                tool(
+                    name = TOOL_DETECT_LANGUAGE,
+                    description = "Identify which language and script a piece of text is written in. " +
+                        "Use only when the user asks what language something is.",
+                    properties = JSONObject().put("text", stringParam("The text to identify.")),
+                    required = listOf("text"),
                 ),
             )
             .put(
@@ -522,7 +617,17 @@ class SarvamClient(private val apiKey: String) {
             .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
             .build()
 
-        val json = execute(request, "Speech synthesis")
+        val json = try {
+            execute(request, "Speech synthesis")
+        } catch (e: SarvamException) {
+            // A voice the API no longer has should cost the voice, not the reply.
+            if (safeSpeaker == Voices.DEFAULT || e.message?.contains("speaker", ignoreCase = true) != true) throw e
+            payload.put("speaker", Voices.DEFAULT)
+            execute(
+                request.newBuilder().post(payload.toString().toRequestBody(JSON_MEDIA_TYPE)).build(),
+                "Speech synthesis",
+            )
+        }
         // Documented shape is {"audios": ["<base64>"]}; accept a bare string too.
         val encoded = json.optJSONArray("audios")
             ?.optString(0)
@@ -537,7 +642,88 @@ class SarvamClient(private val apiKey: String) {
         }
     }
 
-    fun resetConversation() = history.clear()
+    /**
+     * Speaks a reply over the streaming socket, returning once it has been heard.
+     *
+     * @throws StreamingException on failure; see [StreamingException.audioStarted].
+     */
+    suspend fun speakStreaming(text: String, languageCode: String, speaker: String, sink: PcmSink) =
+        streaming.speak(
+            text = text.take(TTS_CHAR_LIMIT),
+            languageCode = Language.spokenOrDefault(languageCode),
+            speaker = if (Voices.isValid(speaker)) speaker else Voices.DEFAULT,
+            model = TTS_MODEL,
+            sink = sink,
+        )
+
+    // ── 4. Translation and scripts ───────────────────────────────────────
+
+    /** @return the translation, or a sentence explaining why it could not be done. */
+    suspend fun translate(text: String, target: String?, source: String? = null, tone: String? = null): String =
+        withContext(Dispatchers.IO) {
+            when (val plan = TextTools.translation(text, target, source, tone)) {
+                is TextTools.Plan.Refused -> plan.reason
+                is TextTools.Plan.Request -> postText("translate", plan.body, "Translation")
+                    .stringOrNull("translated_text")
+                    ?: "The translator returned nothing."
+            }
+        }
+
+    suspend fun transliterate(text: String, target: String?, source: String? = null): String =
+        withContext(Dispatchers.IO) {
+            when (val plan = TextTools.transliteration(text, target, source)) {
+                is TextTools.Plan.Refused -> plan.reason
+                is TextTools.Plan.Request -> postText("transliterate", plan.body, "Transliteration")
+                    .stringOrNull("transliterated_text")
+                    ?: "Transliteration returned nothing."
+            }
+        }
+
+    suspend fun identifyLanguage(text: String): String = withContext(Dispatchers.IO) {
+        val json = postText("text-lid", JSONObject().put("input", text.take(1000)), "Language detection")
+        val language = json.stringOrNull("language_code")
+        val script = json.stringOrNull("script_code")
+        if (language == null) "The language could not be identified." else {
+            "Language: ${TextTools.languageName(language)} ($language)" + (script?.let { ", script: $it" } ?: "")
+        }
+    }
+
+    private fun postText(path: String, body: JSONObject, what: String): JSONObject = execute(
+        Request.Builder()
+            .url("$BASE_URL/$path")
+            .addHeader("api-subscription-key", apiKey)
+            .post(body.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .build(),
+        what,
+    )
+
+    // ── 5. Shared documents ──────────────────────────────────────────────
+
+    /** Makes a document's text available to every later turn of this conversation. */
+    fun attachDocument(name: String, text: String) {
+        documentContext.add(name to text)
+    }
+
+    private fun documentPrompt(): String? {
+        if (documentContext.isEmpty()) return null
+        // Newest first, so if the budget runs out it is the oldest document that is cut.
+        var budget = DOCUMENT_CONTEXT_CHARS
+        val parts = documentContext.asReversed().mapNotNull { (name, text) ->
+            if (budget <= 0) return@mapNotNull null
+            val kept = text.take(budget)
+            budget -= kept.length
+            val cut = if (kept.length < text.length) "\n[…the rest of this document was cut to fit]" else ""
+            "=== Document: $name ===\n$kept$cut"
+        }
+        return "The user has shared these documents, read by Sarvam Document Intelligence. " +
+            "Answer questions about them from this text and say so when the answer is not in it.\n\n" +
+            parts.joinToString("\n\n")
+    }
+
+    fun resetConversation() {
+        history.clear()
+        documentContext.clear()
+    }
 
     // ── Shared request plumbing ──────────────────────────────────────────
 
@@ -606,17 +792,4 @@ class SarvamClient(private val apiKey: String) {
 
 private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
 private const val WAV_HEADER_BYTES = 44L
-
-/**
- * Reads a string field, treating JSON null as absent.
- *
- * Android's [JSONObject.optString] stringifies `JSONObject.NULL` to the literal `"null"`
- * instead of returning the fallback, so a null field silently becomes the four-character
- * word "null". Every string read from an API response must go through this.
- */
-private fun JSONObject.stringOrNull(key: String): String? {
-    if (isNull(key)) return null
-    val value = optString(key).trim()
-    return value.takeIf { it.isNotEmpty() && it != "null" }
-}
 

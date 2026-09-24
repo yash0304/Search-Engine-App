@@ -1,16 +1,19 @@
 package com.sarvam.voiceassistant
 
 import android.app.Application
+import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.concurrent.atomic.AtomicLong
 
@@ -26,7 +29,7 @@ data class Message(
 )
 
 /** What the pipeline is currently doing — drives the status line and the mic button. */
-enum class Stage { IDLE, RECORDING, TRANSCRIBING, THINKING, SEARCHING, SPEAKING }
+enum class Stage { IDLE, RECORDING, TRANSCRIBING, THINKING, SEARCHING, SPEAKING, READING }
 
 data class UiState(
     val messages: List<Message> = emptyList(),
@@ -47,6 +50,16 @@ data class UiState(
     val searchQuery: String? = null,
     /** Human-readable state of the offline dictionary, shown in Settings. */
     val dictionaryStatus: String = "Checking…",
+    val streamingEnabled: Boolean = true,
+    val autoStopListening: Boolean = true,
+    val sttMode: String = SpeechOptions.DEFAULT_MODE,
+    val sttModel: String = SpeechOptions.DEFAULT_STT_MODEL,
+    /**
+     * How the last turn was actually heard and spoken — streamed or standard, and why. The
+     * streaming protocol was built from Sarvam's SDK but never heard live before release, so
+     * this is what shows whether it works on a real phone.
+     */
+    val speechDiagnostics: String = "No voice turn yet.",
 ) {
     val isBusy: Boolean get() = stage != Stage.IDLE
 }
@@ -71,6 +84,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             lockEnabled = store.lockEnabled,
             webSearchEnabled = store.webSearchEnabled,
             locationEnabled = store.locationEnabled,
+            streamingEnabled = store.streamingEnabled,
+            autoStopListening = store.autoStopListening,
+            sttMode = store.sttMode,
+            sttModel = store.sttModel,
         ),
     )
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
@@ -162,6 +179,21 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun setSpeechOptions(streaming: Boolean, autoStop: Boolean, sttMode: String, sttModel: String) {
+        store.streamingEnabled = streaming
+        store.autoStopListening = autoStop
+        store.sttMode = sttMode
+        store.sttModel = sttModel
+        _uiState.update {
+            it.copy(
+                streamingEnabled = store.streamingEnabled,
+                autoStopListening = store.autoStopListening,
+                sttMode = store.sttMode,
+                sttModel = store.sttModel,
+            )
+        }
+    }
+
     /** True when the OS has already granted a location permission. */
     fun hasLocationPermission(): Boolean = location.hasPermission()
 
@@ -240,19 +272,43 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         setStage(Stage.RECORDING)
 
         pipeline = viewModelScope.launch {
+            val state = _uiState.value
+            // Opened before recording so words are transcribed while you are still talking.
+            val live = if (state.streamingEnabled) {
+                runCatching {
+                    api.streaming.openTranscription(
+                        languageCode = state.inputLanguage,
+                        model = state.sttModel,
+                        mode = state.sttMode,
+                        onSpeechEnded = { if (_uiState.value.autoStopListening) recorder.requestStop() },
+                    )
+                }.getOrNull()
+            } else {
+                null
+            }
+
             try {
-                val audio = recorder.record(MAX_RECORD_MS)
+                val audio = recorder.record(MAX_RECORD_MS) { pcm, length -> live?.send(pcm, length) }
 
                 setStage(Stage.TRANSCRIBING)
-                val transcription = api.transcribe(audio, _uiState.value.inputLanguage)
-                addMessage(Message(Role.USER, transcription.transcript, transcription.languageCode))
+                val streamed = live?.finish()
+                val heard = if (streamed != null) "streamed" else {
+                    if (live != null) "standard (stream: ${live.failureReason() ?: "no transcript"})" else "standard"
+                }
+                val transcription = streamed ?: api.transcribe(audio, state.inputLanguage, state.sttModel, state.sttMode)
+                // In translate mode the text is English whatever was spoken; tagging it with the
+                // spoken language would have the English reply read by, say, a Hindi voice.
+                val textLanguage = if (state.sttMode == "translate") "en-IN" else transcription.languageCode
+                addMessage(Message(Role.USER, transcription.transcript, textLanguage))
+                noteSpeech(heard = heard)
 
-                respondTo(api, transcription.transcript, transcription.languageCode)
+                respondTo(api, transcription.transcript, textLanguage)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 fail(e)
             } finally {
+                live?.cancel()
                 if (_uiState.value.stage != Stage.IDLE) setStage(Stage.IDLE)
             }
         }
@@ -295,14 +351,86 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         addMessage(Message(Role.ASSISTANT, reply, languageCode))
 
         setStage(Stage.SPEAKING)
-        val speaker = _uiState.value.speaker.ifBlank { Voices.defaultSpeakerFor(languageCode) }
-        val audioBytes = api.synthesize(reply, languageCode, speaker)
+        // Speak in the language the reply is written in, which is not always the question's.
+        val spokenLanguage = ReplyLanguage.detect(reply, languageCode)
+        val speaker = _uiState.value.speaker.ifBlank { Voices.defaultSpeakerFor(spokenLanguage) }
 
+        if (_uiState.value.streamingEnabled) {
+            try {
+                api.speakStreaming(reply, spokenLanguage, speaker, PcmPlayer())
+                noteSpeech(spoke = "streamed")
+                setStage(Stage.IDLE)
+                return
+            } catch (e: StreamingException) {
+                Log.w(TAG, "Streaming speech failed", e)
+                if (e.audioStarted) {
+                    // Half the reply was heard; starting again from the top would be worse.
+                    noteSpeech(spoke = "streamed, cut off (${e.message})")
+                    setStage(Stage.IDLE)
+                    return
+                }
+                noteSpeech(spoke = "standard (stream: ${e.message})")
+            }
+        } else {
+            noteSpeech(spoke = "standard")
+        }
+
+        val audioBytes = api.synthesize(reply, spokenLanguage, speaker)
         val file = File(getApplication<Application>().cacheDir, "reply.wav")
         file.writeBytes(audioBytes)
         player.play(file) // Suspends until the reply has actually finished playing.
 
         setStage(Stage.IDLE)
+    }
+
+    private var lastHeard = "—"
+    private var lastSpoke = "—"
+
+    private fun noteSpeech(heard: String? = null, spoke: String? = null) {
+        heard?.let { lastHeard = it }
+        spoke?.let { lastSpoke = it }
+        _uiState.update { it.copy(speechDiagnostics = "Last turn — heard: $lastHeard; spoke: $lastSpoke") }
+    }
+
+    // ── Documents ────────────────────────────────────────────────────────
+
+    /** Reads a PDF or photo with Document Intelligence and adds it to the conversation. */
+    fun readDocument(uri: Uri) {
+        if (_uiState.value.isBusy) return
+        val api = client ?: run {
+            showError("Add your Sarvam API key in Settings first.")
+            return
+        }
+
+        setStage(Stage.READING)
+        pipeline = viewModelScope.launch {
+            try {
+                val prepared = withContext(Dispatchers.IO) { DocumentInput.prepare(getApplication<Application>(), uri) }
+                val language = _uiState.value.inputLanguage.takeIf { it != Language.AUTO.code } ?: "en-IN"
+
+                val text = api.documents.read(prepared.pdf, language) { step ->
+                    _uiState.update { it.copy(searchQuery = "$step ${prepared.name}") }
+                }
+                api.attachDocument(prepared.name, text)
+                _uiState.update { it.copy(searchQuery = null) }
+
+                val words = text.split(Regex("\\s+")).count { it.isNotBlank() }
+                addMessage(
+                    Message(
+                        Role.ASSISTANT,
+                        "I've read \"${prepared.name}\" ($words words). Ask me anything about it — " +
+                            "to summarise it, translate it, or find something in it.",
+                    ),
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                fail(e)
+            } finally {
+                _uiState.update { it.copy(searchQuery = null) }
+                if (_uiState.value.stage != Stage.IDLE) setStage(Stage.IDLE)
+            }
+        }
     }
 
     fun cancelPipeline() {

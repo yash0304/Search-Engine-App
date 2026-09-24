@@ -18,7 +18,28 @@ class VoicesTest {
     fun `accepts documented speakers`() {
         assertTrue(Voices.isValid("shubh"))
         assertTrue(Voices.isValid("ritu"))
-        assertTrue(Voices.isValid("amelia"))
+        assertTrue(Voices.isValid("priya"))
+    }
+
+    @Test
+    fun `rejects voices that are not bulbul v3 speakers`() {
+        // Both were listed here once, and "amelia" was the English default. This test used
+        // to assert amelia WAS valid, which locked the mistake in.
+        assertFalse(Voices.isValid("amelia"))
+        assertFalse(Voices.isValid("sophia"))
+    }
+
+    @Test
+    fun `list matches the official SDK exactly`() {
+        // bulbul:v3 speakers from sarvamai 0.1.34, ConfigureConnectionDataSpeaker.
+        val sdk = setOf(
+            "shubh", "aditya", "ritu", "priya", "neha", "rahul", "pooja", "rohan", "simran",
+            "kavya", "amit", "dev", "ishita", "shreya", "ratan", "varun", "manan", "sumit",
+            "roopa", "kabir", "aayan", "ashutosh", "advait", "anand", "tanya", "tarun", "sunny",
+            "mani", "gokul", "vijay", "shruti", "suhani", "mohit", "kavitha", "rehan", "soham",
+            "rupali",
+        )
+        assertEquals(sdk, Voices.ALL.toSet())
     }
 
     @Test

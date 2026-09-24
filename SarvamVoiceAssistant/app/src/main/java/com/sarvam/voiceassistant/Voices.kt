@@ -11,11 +11,16 @@ package com.sarvam.voiceassistant
  */
 object Voices {
 
+    /**
+     * Exactly the bulbul:v3 speakers in the official `sarvamai` SDK (v0.1.34). "amelia" and
+     * "sophia" used to be listed here and are not v3 voices — and "amelia" was the English
+     * default, so English replies were being sent a speaker the API does not have.
+     */
     val ALL: List<String> = listOf(
         "shubh", "aditya", "ritu", "priya", "neha", "rahul", "pooja", "rohan",
         "simran", "kavya", "amit", "dev", "ishita", "shreya", "ratan", "varun",
         "manan", "sumit", "roopa", "kabir", "aayan", "ashutosh", "advait",
-        "amelia", "sophia", "anand", "tanya", "tarun", "sunny", "mani", "gokul",
+        "anand", "tanya", "tarun", "sunny", "mani", "gokul",
         "vijay", "shruti", "suhani", "mohit", "kavitha", "rehan", "soham", "rupali",
     )
 
@@ -25,7 +30,7 @@ object Voices {
     private val byLanguage = mapOf(
         "gu-IN" to "ritu",
         "hi-IN" to "shubh",
-        "en-IN" to "amelia",
+        "en-IN" to "priya",
     )
 
     fun defaultSpeakerFor(languageCode: String): String =
@@ -48,3 +53,6 @@ enum class Language(val code: String, val label: String, val nativeLabel: String
             if (code.isBlank() || code == "unknown") "en-IN" else code
     }
 }
+
+/** What was said, and the language it was said in. */
+data class Transcription(val transcript: String, val languageCode: String)
