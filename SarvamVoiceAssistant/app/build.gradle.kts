@@ -50,6 +50,10 @@ android {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
+        jniLibs {
+            // LiteRT-LM and MediaPipe may each bundle the C++ runtime; one copy is enough.
+            pickFirsts += "**/libc++_shared.so"
+        }
     }
 
     testOptions {
@@ -82,6 +86,10 @@ dependencies {
     // "Can only use lower 16 bits for requestCode". Fragment 1.3.0 dropped that packing.
     implementation(libs.androidx.fragment.ktx)
     implementation(libs.play.services.location)
+    // Runs Gemma 4 on the phone for offline answers; see OnDeviceLlm.
+    implementation(libs.litertlm.android)
+    // Detects the language of typed text on the phone; see LanguageDetect.
+    implementation(libs.mediapipe.tasks.text)
     implementation(libs.okhttp)
 
     testImplementation(libs.junit)

@@ -42,6 +42,14 @@ class SpeechOptionsTest {
     }
 
     @Test
+    fun englishLettersAreRecognisedAsNeedingADetector() {
+        assertEquals(true, ReplyLanguage.isMostlyLatin("Hello, how can I help you today?"))
+        assertEquals(true, ReplyLanguage.isMostlyLatin("aap kaise hain"))
+        assertEquals(false, ReplyLanguage.isMostlyLatin("नमस्ते, आप कैसे हैं?"))
+        assertEquals(false, ReplyLanguage.isMostlyLatin("12345 !!"))
+    }
+
+    @Test
     fun unspeakableFallbackBecomesEnglish() {
         assertEquals("en-IN", ReplyLanguage.detect("hello", fallback = "unknown"))
         assertEquals("en-IN", ReplyLanguage.detect("hello", fallback = "sa-IN"))

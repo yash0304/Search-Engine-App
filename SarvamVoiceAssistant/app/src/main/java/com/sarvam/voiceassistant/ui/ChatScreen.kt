@@ -152,8 +152,8 @@ fun ChatScreen(
     }
 
     // Open settings automatically on a fresh install so the app is never a dead end.
-    LaunchedEffect(state.hasApiKey) {
-        if (!state.hasApiKey) showSettings = true
+    LaunchedEffect(state.canAnswer) {
+        if (!state.canAnswer) showSettings = true
     }
 
     if (showSettings) {
@@ -162,6 +162,7 @@ fun ChatScreen(
         LaunchedEffect(Unit) {
             viewModel.refreshModels()
             viewModel.refreshDictionaryStatus()
+            viewModel.refreshModelStatus()
         }
 
         SettingsDialog(
@@ -184,7 +185,18 @@ fun ChatScreen(
                 sttModel = state.sttModel,
             ),
             speechDiagnostics = state.speechDiagnostics,
-            onSave = { key, speaker, model, lock, webSearch, useLocation, speech ->
+            offline = OfflineSettings(
+                answerSource = state.answerSource,
+                model = state.model,
+                hasToken = state.hasHuggingFaceToken,
+                lowMemory = state.lowMemory,
+            ),
+            onDownloadModel = viewModel::downloadModel,
+            onCancelDownload = viewModel::cancelModelDownload,
+            onDeleteModel = viewModel::deleteModel,
+            onClearToken = viewModel::clearHuggingFaceToken,
+            onSave = { key, speaker, model, lock, webSearch, useLocation, speech, source ->
+                viewModel.setAnswerSource(source)
                 viewModel.setSpeechOptions(speech.streaming, speech.autoStop, speech.sttMode, speech.sttModel)
                 viewModel.saveApiKey(key) // Blank keeps the stored key.
                 viewModel.setSpeaker(speaker)
@@ -213,8 +225,8 @@ fun ChatScreen(
         draft = draft,
         onDraftChange = { draft = it },
         onSend = {
-            val language = Language.spokenOrDefault(state.inputLanguage)
-            viewModel.sendText(draft, language)
+            // Auto-detect is resolved from the text itself, on the phone.
+            viewModel.sendText(draft, state.inputLanguage)
             draft = ""
         },
         onMic = ::requestMic,
@@ -303,7 +315,7 @@ internal fun ChatContent(
                 stage = state.stage,
                 searchQuery = state.searchQuery,
                 amplitude = amplitude,
-                enabled = state.hasApiKey,
+                enabled = state.canAnswer,
                 onSend = onSend,
                 onMic = onMic,
                 onAttach = onAttach,
@@ -319,7 +331,7 @@ internal fun ChatContent(
                 ConversationList(state.messages, state.nextExpiry)
             } else {
                 WelcomeScreen(
-                    hasApiKey = state.hasApiKey,
+                    hasApiKey = state.canAnswer,
                     busy = state.isBusy,
                     chats = state.chats,
                     onOpenChat = onOpenChat,
@@ -394,7 +406,8 @@ private fun WelcomeScreen(
                     Text("ONE STEP FIRST", style = overline)
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "Add your Sarvam API key. It is stored encrypted and never shown again.",
+                        "Add your Sarvam API key, or download the on-device model to use Boliyan " +
+                            "without internet.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSecondaryContainer,
                     )

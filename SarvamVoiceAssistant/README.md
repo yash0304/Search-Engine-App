@@ -238,6 +238,31 @@ for this app to call. What this app does — live speech in, tools, streamed spe
 the same pipeline a voice agent runs, on your own phone. Putting it on a phone number would
 mean Sarvam's enterprise onboarding rather than code here.
 
+## Answers without internet
+
+Settings → **Answers from** chooses who answers:
+
+| Choice | What happens |
+|---|---|
+| **Automatic** (default) | Sarvam when online; the on-device model when offline, or when the network drops mid-question. |
+| **Sarvam (cloud)** | Always Sarvam, with web search, weather, translation and documents. Needs internet. |
+| **On-device (Gemma 4)** | Everything stays on the phone, speech included. Plain chat only. |
+
+The on-device model is Google's **Gemma 4 E2B** in LiteRT-LM format, the same file Google's
+AI Edge Gallery app uses. It is a one-time **2.6 GB** download from Hugging Face, made with
+Android's DownloadManager so it survives the app closing, and needs a phone with about 8 GB
+of memory. It loads on the GPU and falls back to the CPU. If Hugging Face ever asks for a
+login, paste a free read token in Settings; it is stored encrypted and sent only to
+huggingface.co.
+
+Offline, Boliyan hears and speaks with the phone's own speech recognition and voices. For
+Hindi or Gujarati without internet, add the language under Android Settings → System →
+Languages → On-device speech recognition.
+
+Typed text in English letters is ambiguous: it could be English or romanised Hindi. A 315 KB
+MediaPipe language detector, bundled in the app, tells them apart on the phone, so replies
+are spoken in the right voice.
+
 ## Model selection
 
 Sarvam retires chat models fairly often, and every retirement breaks clients that pin a

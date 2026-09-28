@@ -80,5 +80,21 @@ object ReplyLanguage {
         return if (detected == "hi-IN" && fallback == "mr-IN") "mr-IN" else detected
     }
 
-    private fun spoken(code: String): String = if (code in SPOKEN) code else "en-IN"
+    /**
+     * True when the text is written in English letters — where the script says nothing about
+     * the language, so a detector has to decide between English and romanised Hindi.
+     */
+    fun isMostlyLatin(text: String): Boolean {
+        var latin = 0
+        var other = 0
+        for (char in text) {
+            when {
+                char in 'a'..'z' || char in 'A'..'Z' -> latin++
+                char.isLetter() -> other++
+            }
+        }
+        return latin > 0 && latin >= other * 4
+    }
+
+    fun spoken(code: String): String = if (code in SPOKEN) code else "en-IN"
 }

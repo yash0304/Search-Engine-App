@@ -34,7 +34,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import com.sarvam.voiceassistant.AnswerSource
 import com.sarvam.voiceassistant.BuildConfig
+import com.sarvam.voiceassistant.ModelStatus
+import com.sarvam.voiceassistant.OnDeviceModel
 import com.sarvam.voiceassistant.SpeechOptions
 import com.sarvam.voiceassistant.Voices
 
@@ -46,6 +49,14 @@ data class SpeechSettings(
     val autoStop: Boolean,
     val sttMode: String,
     val sttModel: String,
+)
+
+/** Where answers come from, and the on-device model's state. */
+data class OfflineSettings(
+    val answerSource: AnswerSource,
+    val model: ModelStatus,
+    val hasToken: Boolean,
+    val lowMemory: Boolean,
 )
 
 /**
@@ -70,6 +81,11 @@ fun SettingsDialog(
     onRebuildDictionary: () -> Unit,
     speech: SpeechSettings,
     speechDiagnostics: String,
+    offline: OfflineSettings,
+    onDownloadModel: (token: String) -> Unit,
+    onCancelDownload: () -> Unit,
+    onDeleteModel: () -> Unit,
+    onClearToken: () -> Unit,
     onSave: (
         apiKey: String,
         speaker: String,
@@ -78,6 +94,7 @@ fun SettingsDialog(
         webSearch: Boolean,
         location: Boolean,
         speech: SpeechSettings,
+        answerSource: AnswerSource,
     ) -> Unit,
     onClearKey: () -> Unit,
     onDismiss: () -> Unit,
@@ -90,6 +107,8 @@ fun SettingsDialog(
     var useLocation by remember { mutableStateOf(locationEnabled) }
     var keyVisible by remember { mutableStateOf(false) }
     var speechChoice by remember { mutableStateOf(speech) }
+    var source by remember { mutableStateOf(offline.answerSource) }
+    var token by remember { mutableStateOf("") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -143,6 +162,27 @@ fun SettingsDialog(
                 if (hasSavedKey) {
                     TextButton(onClick = onClearKey) { Text("Remove saved key") }
                 }
+
+                Spacer(Modifier.height(20.dp))
+                Text("ANSWERS", style = overline)
+                Spacer(Modifier.height(8.dp))
+                ChoiceSection(
+                    title = "Answers from",
+                    hint = source.hint,
+                    selected = source.value,
+                    options = AnswerSource.entries.map { it.value to it.label },
+                    onSelect = { source = AnswerSource.from(it) },
+                )
+                Spacer(Modifier.height(12.dp))
+                OnDeviceModelSection(
+                    offline = offline,
+                    token = token,
+                    onTokenChange = { token = it },
+                    onDownload = { onDownloadModel(token.trim()) },
+                    onCancel = onCancelDownload,
+                    onDelete = onDeleteModel,
+                    onClearToken = onClearToken,
+                )
 
                 Spacer(Modifier.height(16.dp))
                 ToggleRow(
@@ -270,9 +310,9 @@ fun SettingsDialog(
         },
         confirmButton = {
             TextButton(
-                onClick = { onSave(apiKey.trim(), speaker, model, lock, webSearch, useLocation, speechChoice) },
-                // With no key saved yet, one must be entered before anything can work.
-                enabled = hasSavedKey || apiKey.isNotBlank(),
+                onClick = { onSave(apiKey.trim(), speaker, model, lock, webSearch, useLocation, speechChoice, source) },
+                // Something has to be able to answer: a Sarvam key, or the on-device model.
+                enabled = hasSavedKey || apiKey.isNotBlank() || offline.model.phase != ModelStatus.Phase.ABSENT,
             ) {
                 Text("Save")
             }
@@ -281,6 +321,70 @@ fun SettingsDialog(
             TextButton(onClick = onDismiss) { Text("Cancel") }
         },
     )
+}
+
+@Composable
+private fun OnDeviceModelSection(
+    offline: OfflineSettings,
+    token: String,
+    onTokenChange: (String) -> Unit,
+    onDownload: () -> Unit,
+    onCancel: () -> Unit,
+    onDelete: () -> Unit,
+    onClearToken: () -> Unit,
+) {
+    val model = offline.model
+    Text("On-device model", style = MaterialTheme.typography.titleSmall)
+    Spacer(Modifier.height(4.dp))
+    Text(
+        text = "${OnDeviceModel.NAME} by Google, run with LiteRT-LM. ${OnDeviceModel.sizeLabel()} download, " +
+            "once. Best on phones with ${OnDeviceModel.MIN_DEVICE_MEMORY_GB} GB of memory or more.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    if (offline.lowMemory) {
+        Spacer(Modifier.height(4.dp))
+        Text(
+            text = "This phone has less than ${OnDeviceModel.MIN_DEVICE_MEMORY_GB} GB of memory; the model may be slow or fail to load.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+        )
+    }
+    Spacer(Modifier.height(6.dp))
+    Text(
+        text = model.describe(),
+        style = MaterialTheme.typography.bodyMedium,
+        color = if (model.problem != null && model.phase == ModelStatus.Phase.ABSENT) {
+            MaterialTheme.colorScheme.error
+        } else {
+            MaterialTheme.colorScheme.onSurface
+        },
+    )
+    Spacer(Modifier.height(8.dp))
+
+    when (model.phase) {
+        ModelStatus.Phase.ABSENT -> {
+            OutlinedTextField(
+                value = token,
+                onValueChange = onTokenChange,
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text(if (offline.hasToken) "Replace Hugging Face token" else "Hugging Face token (only if asked)") },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+            )
+            if (offline.hasToken) {
+                TextButton(onClick = onClearToken) { Text("Remove saved token") }
+            }
+            Spacer(Modifier.height(6.dp))
+            OutlinedButton(onClick = onDownload, modifier = Modifier.fillMaxWidth()) {
+                Text("Download (${OnDeviceModel.sizeLabel()})")
+            }
+        }
+        ModelStatus.Phase.DOWNLOADING ->
+            OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) { Text("Cancel download") }
+        ModelStatus.Phase.READY ->
+            TextButton(onClick = onDelete) { Text("Delete model (frees ${OnDeviceModel.sizeLabel()})") }
+    }
 }
 
 @Composable

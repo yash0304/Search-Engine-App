@@ -78,6 +78,19 @@ class ApiKeyStore(context: Context) {
         get() = readString(KEY_STT_MODEL, SpeechOptions.DEFAULT_STT_MODEL).let(SpeechOptions::validModel)
         set(value) = write { putString(KEY_STT_MODEL, SpeechOptions.validModel(value)) }
 
+    /** Where answers come from; one of [AnswerSource]. */
+    var answerSource: AnswerSource
+        get() = AnswerSource.from(readString(KEY_ANSWER_SOURCE, AnswerSource.AUTOMATIC.value))
+        set(value) = write { putString(KEY_ANSWER_SOURCE, value.value) }
+
+    /**
+     * Optional Hugging Face access token, sent only when downloading the on-device model and
+     * only if the model page asks for one. Kept encrypted like the Sarvam key.
+     */
+    var huggingFaceToken: String
+        get() = readString(KEY_HF_TOKEN, "").trim()
+        set(value) = write { putString(KEY_HF_TOKEN, value.trim()) }
+
     /**
      * A safe stand-in for the key, e.g. `sk_••••••7f3a`. The full key is never handed to the
      * UI — showing it in Settings meant anyone holding the phone could read it.
@@ -131,6 +144,8 @@ class ApiKeyStore(context: Context) {
         const val KEY_AUTO_STOP = "auto_stop_listening"
         const val KEY_STT_MODE = "stt_mode"
         const val KEY_STT_MODEL = "stt_model"
+        const val KEY_ANSWER_SOURCE = "answer_source"
+        const val KEY_HF_TOKEN = "hf_token"
 
         fun encrypted(context: Context): SharedPreferences {
             val masterKey = MasterKey.Builder(context)

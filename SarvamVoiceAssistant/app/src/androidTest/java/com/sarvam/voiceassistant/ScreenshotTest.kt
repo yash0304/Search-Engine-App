@@ -26,6 +26,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.sarvam.voiceassistant.ui.BoliyanColors
 import com.sarvam.voiceassistant.ui.ChatContent
 import com.sarvam.voiceassistant.ui.LockScreen
+import com.sarvam.voiceassistant.ui.OfflineSettings
 import com.sarvam.voiceassistant.ui.SarvamTheme
 import com.sarvam.voiceassistant.ui.SettingsDialog
 import com.sarvam.voiceassistant.ui.SpeechSettings
@@ -122,11 +123,30 @@ class ScreenshotTest {
     fun lock() = shoot("7_lock") { LockScreen(message = null, onUnlock = {}) }
 
     @Test
-    fun settings() {
+    fun settings() = settingsShot(
+        "8_settings",
+        hasKey = true,
+        OfflineSettings(AnswerSource.AUTOMATIC, ModelStatus(ModelStatus.Phase.READY), hasToken = false, lowMemory = false),
+    )
+
+    /** No Sarvam key, the model part-way down: the offline-only setup. */
+    @Test
+    fun settingsDownloading() = settingsShot(
+        "11_settings_downloading",
+        hasKey = false,
+        OfflineSettings(
+            AnswerSource.ON_DEVICE,
+            ModelStatus(ModelStatus.Phase.DOWNLOADING, downloadedBytes = 1_100_000_000L),
+            hasToken = false,
+            lowMemory = false,
+        ),
+    )
+
+    private fun settingsShot(name: String, hasKey: Boolean, offline: OfflineSettings) {
         compose.setContent {
             SarvamTheme(darkTheme = false) {
                 SettingsDialog(
-                    hasSavedKey = true,
+                    hasSavedKey = hasKey,
                     maskedKey = "sk_••••••7f3a",
                     initialSpeaker = "",
                     initialModel = "",
@@ -139,8 +159,13 @@ class ScreenshotTest {
                     dictionaryStatus = "Ready — 207,235 entries",
                     onRebuildDictionary = {},
                     speech = SpeechSettings(streaming = true, autoStop = true, sttMode = "transcribe", sttModel = "saaras:v3"),
-                    speechDiagnostics = "Last turn — heard: streamed; spoke: streamed",
-                    onSave = { _, _, _, _, _, _, _ -> },
+                    speechDiagnostics = "Last turn — heard: streamed; answered: Sarvam; spoke: streamed",
+                    offline = offline,
+                    onDownloadModel = {},
+                    onCancelDownload = {},
+                    onDeleteModel = {},
+                    onClearToken = {},
+                    onSave = { _, _, _, _, _, _, _, _ -> },
                     onClearKey = {},
                     onDismiss = {},
                 )
@@ -148,7 +173,7 @@ class ScreenshotTest {
         }
         compose.waitForIdle()
         // The dialog is its own window, so capture it rather than the (empty) root.
-        runCatching { save("8_settings", compose.onNode(isDialog()).captureToImage().asAndroidBitmap()) }
+        runCatching { save(name, compose.onNode(isDialog()).captureToImage().asAndroidBitmap()) }
             .onFailure { Log.w(TAG, "Could not capture the settings dialog", it) }
     }
 

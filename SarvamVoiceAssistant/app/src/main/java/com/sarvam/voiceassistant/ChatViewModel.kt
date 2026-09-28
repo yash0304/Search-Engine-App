@@ -1,5 +1,6 @@
 package com.sarvam.voiceassistant
 
+import android.app.ActivityManager
 import android.app.Application
 import android.net.Uri
 import android.util.Log
@@ -10,8 +11,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -68,8 +72,18 @@ data class UiState(
     val nextExpiry: Long? = null,
     /** Chats from the last 24 hours, most recent first, for the welcome page. */
     val chats: List<ChatSummary> = emptyList(),
+    /** Sarvam, the on-device model, or whichever suits the moment. */
+    val answerSource: AnswerSource = AnswerSource.AUTOMATIC,
+    /** The on-device model's download state. */
+    val model: ModelStatus = ModelStatus(),
+    val hasHuggingFaceToken: Boolean = false,
+    /** Under 8 GB of memory, where the on-device model may be slow or closed by Android. */
+    val lowMemory: Boolean = false,
 ) {
     val isBusy: Boolean get() = stage != Stage.IDLE
+
+    /** Whether anything can answer: a Sarvam key, or the model on the phone. */
+    val canAnswer: Boolean get() = hasApiKey || model.ready
 }
 
 class ChatViewModel(application: Application) : AndroidViewModel(application) {
@@ -79,6 +93,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val player = AudioPlayer()
     private val location = LocationProvider(application)
     private val dictionary = OfflineDictionary(application)
+    private val connectivity = Connectivity(application)
+    private val modelFiles = ModelDownloader(application)
+    private val onDevice = OnDeviceLlm(application)
+    private val deviceSpeech = DeviceSpeech(application)
+    private val languages = LanguageDetect(application)
+    private var modelPoll: Job? = null
 
     private var client: SarvamClient? = null
     private var pipeline: Job? = null
@@ -106,18 +126,23 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             autoStopListening = store.autoStopListening,
             sttMode = store.sttMode,
             sttModel = store.sttModel,
+            answerSource = store.answerSource,
+            hasHuggingFaceToken = store.huggingFaceToken.isNotBlank(),
+            lowMemory = totalMemory(application) in 1 until OnDeviceModel.LOW_MEMORY_BYTES,
         ),
     )
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
 
-    /** Microphone level, forwarded for the recording animation. */
-    val amplitude: StateFlow<Float> = recorder.amplitude
+    /** Microphone level, from Sarvam's recorder or the phone's recogniser, for the animation. */
+    val amplitude: StateFlow<Float> = combine(recorder.amplitude, deviceSpeech.level) { a, b -> maxOf(a, b) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, 0f)
 
     init {
         if (store.hasApiKey()) {
             client = newClient(store.apiKey)
             refreshModels()
         }
+        refreshModelStatus()
         // Messages expire while the app is open too, not only between launches.
         viewModelScope.launch {
             while (true) {
@@ -146,6 +171,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
         private const val CONVERSATION_FILE = "conversation.json"
         private const val EXPIRY_CHECK_MS = 60_000L
+        private const val MODEL_POLL_MS = 1_000L
+
+        private fun totalMemory(application: Application): Long = runCatching {
+            val info = ActivityManager.MemoryInfo()
+            application.getSystemService(ActivityManager::class.java).getMemoryInfo(info)
+            info.totalMem
+        }.getOrDefault(0L)
     }
 
     // ── Settings ─────────────────────────────────────────────────────────
@@ -274,6 +306,90 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun dismissError() = _uiState.update { it.copy(error = null) }
 
+    // ── Where answers come from ──────────────────────────────────────────
+
+    fun setAnswerSource(source: AnswerSource) {
+        store.answerSource = source
+        // Sarvam only: give back the ~3 GB the model holds, unless it is answering right now.
+        if (source == AnswerSource.SARVAM && !_uiState.value.isBusy) onDevice.release()
+        _uiState.update { it.copy(answerSource = source) }
+    }
+
+    /** @param token a new Hugging Face token, or blank to keep the saved one (if any). */
+    fun downloadModel(token: String) {
+        if (token.isNotBlank()) store.huggingFaceToken = token
+        _uiState.update {
+            it.copy(model = ModelStatus(ModelStatus.Phase.DOWNLOADING), hasHuggingFaceToken = store.huggingFaceToken.isNotBlank())
+        }
+        viewModelScope.launch {
+            val problem = modelFiles.start(store.huggingFaceToken)
+            if (problem != null) {
+                _uiState.update { it.copy(model = ModelStatus(problem = problem)) }
+            } else {
+                pollModel()
+            }
+        }
+    }
+
+    fun cancelModelDownload() {
+        modelPoll?.cancel()
+        modelFiles.cancel()
+        refreshModelStatus()
+    }
+
+    fun deleteModel() {
+        if (_uiState.value.isBusy) return
+        onDevice.release()
+        modelFiles.delete()
+        refreshModelStatus()
+    }
+
+    fun clearHuggingFaceToken() {
+        store.huggingFaceToken = ""
+        _uiState.update { it.copy(hasHuggingFaceToken = false) }
+    }
+
+    /** Re-reads the download state, and follows it while a download is running. */
+    fun refreshModelStatus() {
+        val status = modelFiles.status()
+        _uiState.update { it.copy(model = status) }
+        if (status.phase == ModelStatus.Phase.DOWNLOADING) pollModel()
+    }
+
+    private fun pollModel() {
+        if (modelPoll?.isActive == true) return
+        modelPoll = viewModelScope.launch {
+            while (true) {
+                val status = withContext(Dispatchers.IO) { modelFiles.status() }
+                _uiState.update { it.copy(model = status) }
+                if (status.phase != ModelStatus.Phase.DOWNLOADING) break
+                delay(MODEL_POLL_MS)
+            }
+        }
+    }
+
+    private fun modelReady(): Boolean = _uiState.value.model.ready
+
+    private fun route(): Route =
+        Routing.decide(store.answerSource, connectivity.isOnline(), modelReady(), hasSarvamKey = client != null)
+
+    /**
+     * Sarvam hears and speaks whenever it can be reached — its Indian-language voices are far
+     * better than the phone's — except in On-device mode, which keeps everything on the phone.
+     */
+    private fun useSarvamSpeech(): Boolean =
+        client != null && store.answerSource != AnswerSource.ON_DEVICE && connectivity.isOnline()
+
+    /**
+     * The language [text] is in. Indian scripts identify themselves; English letters could be
+     * English or romanised Hindi, which the on-device detector tells apart.
+     */
+    private suspend fun languageOf(text: String, fallback: String): String {
+        if (!ReplyLanguage.isMostlyLatin(text)) return ReplyLanguage.detect(text, fallback)
+        val detected = withContext(Dispatchers.Default) { languages.detect(text) }
+        return ReplyLanguage.spoken(detected ?: fallback)
+    }
+
     // ── Chats ────────────────────────────────────────────────────────────
 
     /** The trash button: deletes the open chat now, rather than waiting out its 24 hours. */
@@ -341,15 +457,24 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     /** Tap to start recording; tap again to stop and send. */
     fun onMicTapped() {
         when (_uiState.value.stage) {
-            Stage.RECORDING -> recorder.requestStop()
+            Stage.RECORDING -> {
+                recorder.requestStop()
+                deviceSpeech.stopListening()
+            }
             Stage.IDLE -> startVoiceTurn()
             else -> Unit // Busy transcribing/thinking/speaking; ignore.
         }
     }
 
     private fun startVoiceTurn() {
-        val api = client ?: run {
-            showError("Add your Sarvam API key in Settings first.")
+        val route = route()
+        if (route is Route.Unavailable) {
+            showError(route.reason)
+            return
+        }
+        val api = client
+        if (api == null || !useSarvamSpeech()) {
+            startPhoneVoiceTurn(route)
             return
         }
 
@@ -388,7 +513,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 val chatId = addMessage(Message(Role.USER, transcription.transcript, textLanguage))
                 noteSpeech(heard = heard)
 
-                respondTo(api, transcription.transcript, textLanguage, chatId)
+                respondTo(route, transcription.transcript, textLanguage, chatId)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -400,13 +525,35 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Send a typed message in an explicitly chosen language. */
+    /** A voice turn with the phone's own recogniser, for when Sarvam is out of reach. */
+    private fun startPhoneVoiceTurn(route: Route) {
+        setStage(Stage.RECORDING)
+        pipeline = viewModelScope.launch {
+            try {
+                val chosen = _uiState.value.inputLanguage
+                val heard = deviceSpeech.listen(chosen)
+                val language = if (chosen != Language.AUTO.code) chosen else languageOf(heard, "en-IN")
+                val chatId = addMessage(Message(Role.USER, heard, language))
+                noteSpeech(heard = "phone recogniser")
+                respondTo(route, heard, language, chatId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                fail(e)
+            } finally {
+                if (_uiState.value.stage != Stage.IDLE) setStage(Stage.IDLE)
+            }
+        }
+    }
+
+    /** Send a typed message, in a chosen language or [Language.AUTO] to detect it. */
     fun sendText(text: String, languageCode: String) {
         val trimmed = text.trim()
         if (trimmed.isEmpty() || _uiState.value.isBusy) return
 
-        val api = client ?: run {
-            showError("Add your Sarvam API key in Settings first.")
+        val route = route()
+        if (route is Route.Unavailable) {
+            showError(route.reason)
             return
         }
 
@@ -415,8 +562,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
         pipeline = viewModelScope.launch {
             try {
-                val chatId = addMessage(Message(Role.USER, trimmed, languageCode))
-                respondTo(api, trimmed, languageCode, chatId)
+                val language = if (languageCode == Language.AUTO.code) languageOf(trimmed, "en-IN") else languageCode
+                val chatId = addMessage(Message(Role.USER, trimmed, language))
+                respondTo(route, trimmed, language, chatId)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -428,21 +576,69 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Shared tail of both paths: ask the model, then speak the reply. The reply goes to
-     * [chatId] — the chat the question was asked in — even if you have gone Back since.
+     * Shared tail of every path: get an answer, then speak it. The reply goes to [chatId] —
+     * the chat the question was asked in — even if you have gone Back since.
      */
-    private suspend fun respondTo(api: SarvamClient, prompt: String, languageCode: String, chatId: String) {
+    private suspend fun respondTo(route: Route, prompt: String, languageCode: String, chatId: String) {
         setStage(Stage.THINKING)
-        val reply = api.chat(prompt) { query ->
-            _uiState.update { it.copy(stage = Stage.SEARCHING, searchQuery = query) }
+        val api = client
+        var onPhone = route != Route.Sarvam || api == null
+        val reply = if (!onPhone && api != null) {
+            try {
+                api.chat(prompt) { query ->
+                    _uiState.update { it.copy(stage = Stage.SEARCHING, searchQuery = query) }
+                }.also { noteSpeech(answered = "Sarvam") }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (!Routing.fallBackToDevice(store.answerSource, modelReady(), Routing.isNetworkFailure(e))) throw e
+                Log.w(TAG, "Sarvam unreachable; answering on the phone", e)
+                onPhone = true
+                _uiState.update { it.copy(stage = Stage.THINKING, searchQuery = null) }
+                answerOnPhone(prompt, chatId)
+            }
+        } else {
+            answerOnPhone(prompt, chatId)
         }
         _uiState.update { it.copy(searchQuery = null) }
         addMessage(Message(Role.ASSISTANT, reply, languageCode), chatId)
-        titleAfterFirstExchange(api, chatId, prompt, reply)
 
+        if (onPhone) {
+            // Sarvam keeps its own memory of the chat; bring it up to date for the next
+            // question, which may well go to Sarvam again once the phone is back online.
+            if (chatId == activeChatId) {
+                activeChat()?.let { chat -> api?.restoreConversation(chat.messages, chat.documents.map { it.name to it.text }) }
+            }
+        } else if (api != null) {
+            titleAfterFirstExchange(api, chatId, prompt, reply)
+        }
+
+        speak(reply, languageCode)
+    }
+
+    private suspend fun answerOnPhone(prompt: String, chatId: String): String {
+        val model = modelFiles.file?.takeIf { modelReady() }
+            ?: throw SarvamException("The on-device model is not downloaded. Get it in Settings.")
+        val chat = chats.firstOrNull { it.id == chatId }
+        // The question is already the chat's last message; it is sent separately.
+        val history = chat?.messages.orEmpty().let { messages ->
+            if (messages.lastOrNull()?.let { it.role == Role.USER && it.text == prompt } == true) messages.dropLast(1) else messages
+        }
+        val reply = onDevice.reply(model, history, prompt, chat?.documents?.map { it.name to it.text }.orEmpty())
+        noteSpeech(answered = "on this phone (${onDevice.backendName})")
+        return reply
+    }
+
+    /** Speaks [reply] with Sarvam when it can be reached, and the phone's own voice when not. */
+    private suspend fun speak(reply: String, languageCode: String) {
         setStage(Stage.SPEAKING)
         // Speak in the language the reply is written in, which is not always the question's.
-        val spokenLanguage = ReplyLanguage.detect(reply, languageCode)
+        val spokenLanguage = languageOf(reply, languageCode)
+        val api = client
+        if (api == null || !useSarvamSpeech()) {
+            speakOnPhone(reply, spokenLanguage)
+            return
+        }
         val speaker = _uiState.value.speaker.ifBlank { Voices.defaultSpeakerFor(spokenLanguage) }
 
         if (_uiState.value.streamingEnabled) {
@@ -465,7 +661,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             noteSpeech(spoke = "standard")
         }
 
-        val audioBytes = api.synthesize(reply, spokenLanguage, speaker)
+        val audioBytes = try {
+            api.synthesize(reply, spokenLanguage, speaker)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (!Routing.isNetworkFailure(e)) throw e
+            speakOnPhone(reply, spokenLanguage)
+            return
+        }
         val file = File(getApplication<Application>().cacheDir, "reply.wav")
         file.writeBytes(audioBytes)
         player.play(file) // Suspends until the reply has actually finished playing.
@@ -473,13 +677,29 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         setStage(Stage.IDLE)
     }
 
+    private suspend fun speakOnPhone(reply: String, languageCode: String) {
+        try {
+            deviceSpeech.speak(reply, languageCode)
+            noteSpeech(spoke = "phone voice")
+        } catch (e: SarvamException) {
+            // The answer is on screen; a phone without a voice should not turn it into an error.
+            Log.w(TAG, "Phone voice unavailable", e)
+            noteSpeech(spoke = "not spoken (${e.message})")
+        }
+        setStage(Stage.IDLE)
+    }
+
     private var lastHeard = "—"
+    private var lastAnswered = "—"
     private var lastSpoke = "—"
 
-    private fun noteSpeech(heard: String? = null, spoke: String? = null) {
+    private fun noteSpeech(heard: String? = null, answered: String? = null, spoke: String? = null) {
         heard?.let { lastHeard = it }
+        answered?.let { lastAnswered = it }
         spoke?.let { lastSpoke = it }
-        _uiState.update { it.copy(speechDiagnostics = "Last turn — heard: $lastHeard; spoke: $lastSpoke") }
+        _uiState.update {
+            it.copy(speechDiagnostics = "Last turn — heard: $lastHeard; answered: $lastAnswered; spoke: $lastSpoke")
+        }
     }
 
     // ── Documents ────────────────────────────────────────────────────────
@@ -488,7 +708,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun readDocument(uri: Uri) {
         if (_uiState.value.isBusy) return
         val api = client ?: run {
-            showError("Add your Sarvam API key in Settings first.")
+            showError("Reading documents uses Sarvam. Add your Sarvam API key in Settings first.")
+            return
+        }
+        if (!connectivity.isOnline()) {
+            showError("Reading documents needs internet. Documents already read still work offline.")
             return
         }
 
@@ -536,6 +760,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun cancelPipeline() {
         recorder.requestStop()
         player.stop()
+        deviceSpeech.stopListening()
+        deviceSpeech.stopSpeaking()
         pipeline?.cancel()
         pipeline = null
         setStage(Stage.IDLE)
@@ -629,5 +855,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         recorder.requestStop()
         player.stop()
         dictionary.close()
+        deviceSpeech.close()
+        languages.close()
+        onDevice.release()
     }
 }
