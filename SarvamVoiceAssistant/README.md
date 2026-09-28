@@ -246,7 +246,7 @@ Settings → **Answers from** chooses who answers:
 |---|---|
 | **Automatic** (default) | Sarvam when online; the on-device model when offline, or when the network drops mid-question. |
 | **Sarvam (cloud)** | Always Sarvam, with web search, weather, translation and documents. Needs internet. |
-| **On-device (Gemma 4)** | Everything stays on the phone, speech included. Plain chat only. |
+| **On-device (Gemma 4)** | Everything stays on the phone: voice, documents and answers. No web search or weather. |
 
 The on-device model is Google's **Gemma 4 E2B** in LiteRT-LM format, the same file Google's
 AI Edge Gallery app uses. It is a one-time **2.6 GB** download from Hugging Face, made with
@@ -255,9 +255,15 @@ of memory. It loads on the GPU and falls back to the CPU. If Hugging Face ever a
 login, paste a free read token in Settings; it is stored encrypted and sent only to
 huggingface.co.
 
-Offline, Boliyan hears and speaks with the phone's own speech recognition and voices. For
-Hindi or Gujarati without internet, add the language under Android Settings → System →
-Languages → On-device speech recognition.
+The same model hears and reads, so offline:
+
+- **Voice** is recorded as usual and transcribed by Gemma, in Hindi and Gujarati too, with
+  nothing extra to install; tap again to finish (up to 30 seconds). Without the model, the
+  phone's own speech recognition is used instead.
+- **Photos and PDFs** are drawn page by page with Android's PDF renderer and read by Gemma,
+  up to the first 8 pages, a few seconds each. Online, Sarvam's Document Intelligence reads
+  them as before.
+- **Replies** are spoken with the phone's own voices, as Gemma cannot speak.
 
 Typed text in English letters is ambiguous: it could be English or romanised Hindi. A 315 KB
 MediaPipe language detector, bundled in the app, tells them apart on the phone, so replies

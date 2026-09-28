@@ -474,7 +474,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
         val api = client
         if (api == null || !useSarvamSpeech()) {
-            startPhoneVoiceTurn(route)
+            // Gemma hears Hindi and Gujarati with nothing extra installed; the phone's own
+            // recogniser is the fallback for when the model is not downloaded.
+            if (modelReady()) startGemmaVoiceTurn(route) else startPhoneVoiceTurn(route)
             return
         }
 
@@ -520,6 +522,33 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 fail(e)
             } finally {
                 live?.cancel()
+                if (_uiState.value.stage != Stage.IDLE) setStage(Stage.IDLE)
+            }
+        }
+    }
+
+    /** A voice turn heard by Gemma on the phone: recorded as usual, then transcribed offline. */
+    private fun startGemmaVoiceTurn(route: Route) {
+        setStage(Stage.RECORDING)
+        pipeline = viewModelScope.launch {
+            try {
+                // No server to notice the pause, so the turn ends with a second tap.
+                val audio = recorder.record(minOf(MAX_RECORD_MS, OnDeviceModel.MAX_AUDIO_MS))
+                setStage(Stage.TRANSCRIBING)
+                val model = modelFiles.file ?: throw SarvamException("Storage is unavailable right now.")
+                val heard = onDevice.transcribe(model, withContext(Dispatchers.IO) { audio.readBytes() })
+                    ?: throw SarvamException("Nothing was recognised in that recording. Try speaking a little louder.")
+
+                val chosen = _uiState.value.inputLanguage
+                val language = if (chosen != Language.AUTO.code) chosen else languageOf(heard, "en-IN")
+                val chatId = addMessage(Message(Role.USER, heard, language))
+                noteSpeech(heard = "on this phone (Gemma)")
+                respondTo(route, heard, language, chatId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                fail(e)
+            } finally {
                 if (_uiState.value.stage != Stage.IDLE) setStage(Stage.IDLE)
             }
         }
@@ -704,15 +733,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     // ── Documents ────────────────────────────────────────────────────────
 
-    /** Reads a PDF or photo with Document Intelligence and adds it to the conversation. */
+    /**
+     * Reads a PDF or photo and adds it to the conversation: with Sarvam's Document
+     * Intelligence when it can be reached, and with Gemma on the phone when not.
+     */
     fun readDocument(uri: Uri) {
         if (_uiState.value.isBusy) return
-        val api = client ?: run {
-            showError("Reading documents uses Sarvam. Add your Sarvam API key in Settings first.")
-            return
-        }
-        if (!connectivity.isOnline()) {
-            showError("Reading documents needs internet. Documents already read still work offline.")
+        val api = client?.takeIf { store.answerSource != AnswerSource.ON_DEVICE && connectivity.isOnline() }
+        if (api == null && !modelReady()) {
+            showError(
+                if (client == null) "Reading documents needs a Sarvam API key, or the on-device model — both are in Settings."
+                else "You're offline. Download the on-device model in Settings to read documents without internet.",
+            )
             return
         }
 
@@ -722,13 +754,26 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 val prepared = withContext(Dispatchers.IO) { DocumentInput.prepare(getApplication<Application>(), uri) }
                 val language = _uiState.value.inputLanguage.takeIf { it != Language.AUTO.code } ?: "en-IN"
 
-                val text = api.documents.read(prepared.pdf, language) { step ->
-                    _uiState.update { it.copy(searchQuery = "$step ${prepared.name}") }
+                var onPhone = api == null
+                val text = if (api != null) {
+                    try {
+                        api.documents.read(prepared.pdf, language) { step ->
+                            _uiState.update { it.copy(searchQuery = "$step ${prepared.name}") }
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        if (!Routing.fallBackToDevice(store.answerSource, modelReady(), Routing.isNetworkFailure(e))) throw e
+                        onPhone = true
+                        readOnPhone(prepared)
+                    }
+                } else {
+                    readOnPhone(prepared)
                 }
                 // From the welcome page a document starts its own chat, so it never becomes
                 // context for unrelated questions elsewhere; inside a chat it joins that chat.
                 val chatId = activeChatId ?: startChat(ConversationStore.titleFor(null, prepared.name))
-                api.attachDocument(prepared.name, text)
+                client?.attachDocument(prepared.name, text)
                 val document = ConversationStore.SavedDocument(prepared.name, text, System.currentTimeMillis())
                 chats = chats.map { if (it.id == chatId) it.copy(documents = it.documents + document) else it }
                 _uiState.update { it.copy(searchQuery = null) }
@@ -743,7 +788,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     chatId,
                 )
                 // A chat that began with this document is named after what it says.
-                if (chats.firstOrNull { it.id == chatId }?.messages?.size == 1) {
+                if (!onPhone && api != null && chats.firstOrNull { it.id == chatId }?.messages?.size == 1) {
                     nameChat(api, chatId, ChatTitles.forDocument(prepared.name, text))
                 }
             } catch (e: CancellationException) {
@@ -754,6 +799,25 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.update { it.copy(searchQuery = null) }
                 if (_uiState.value.stage != Stage.IDLE) setStage(Stage.IDLE)
             }
+        }
+    }
+
+    /** Reads each page with Gemma, up to [OnDeviceModel.MAX_OFFLINE_PAGES]. */
+    private suspend fun readOnPhone(prepared: DocumentInput.Prepared): String {
+        val model = modelFiles.file?.takeIf { modelReady() }
+            ?: throw SarvamException("The on-device model is not downloaded. Get it in Settings.")
+        val app = getApplication<Application>()
+        val pages = withContext(Dispatchers.IO) { DocumentInput.PdfPages.open(app, prepared.pdf) }
+        return pages.use {
+            val count = minOf(it.count, OnDeviceModel.MAX_OFFLINE_PAGES)
+            val texts = (0 until count).map { index ->
+                val where = if (count == 1) "" else "page ${index + 1} of $count of "
+                _uiState.update { state -> state.copy(searchQuery = "Reading ${where}${prepared.name} on the phone") }
+                val png = withContext(Dispatchers.Default) { it.png(index) }
+                onDevice.readPage(model, png)
+            }
+            if (texts.all { text -> text.isBlank() }) throw SarvamException("Nothing could be read in that document.")
+            OnDeviceModel.joinPages(texts, it.count)
         }
     }
 

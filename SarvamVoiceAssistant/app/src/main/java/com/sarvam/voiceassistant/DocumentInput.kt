@@ -6,10 +6,14 @@ import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.pdf.PdfDocument
+import android.graphics.pdf.PdfRenderer
+import android.os.ParcelFileDescriptor
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.media.ExifInterface
 import java.io.ByteArrayOutputStream
+import java.io.Closeable
+import java.io.File
 
 /**
  * Turns whatever the user picked into the PDF Document Intelligence needs.
@@ -105,4 +109,61 @@ object DocumentInput {
             if (cursor.moveToFirst()) cursor.getString(0) else null
         }
     }.getOrNull()
+
+    /**
+     * A PDF's pages as PNG images, for the on-device model to read — Android draws them
+     * itself, so no library or network is needed.
+     */
+    class PdfPages private constructor(
+        private val file: File,
+        private val descriptor: ParcelFileDescriptor,
+        private val renderer: PdfRenderer,
+    ) : Closeable {
+
+        val count: Int get() = renderer.pageCount
+
+        /** Page [index] as a PNG no larger than [maxEdge] pixels on its long side. */
+        fun png(index: Int, maxEdge: Int = PAGE_EDGE): ByteArray {
+            renderer.openPage(index).use { page ->
+                val scale = maxEdge.toFloat() / maxOf(page.width, page.height)
+                val width = (page.width * scale).toInt().coerceAtLeast(1)
+                val height = (page.height * scale).toInt().coerceAtLeast(1)
+                val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                try {
+                    bitmap.eraseColor(Color.WHITE) // PDF pages are transparent where empty.
+                    page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                    return ByteArrayOutputStream().also { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                        .toByteArray()
+                } finally {
+                    bitmap.recycle()
+                }
+            }
+        }
+
+        override fun close() {
+            runCatching { renderer.close() }
+            runCatching { descriptor.close() }
+            file.delete()
+        }
+
+        companion object {
+            /** Sharp enough for body text; larger only slows the model down. */
+            private const val PAGE_EDGE = 1_280
+
+            /** PdfRenderer needs a seekable file, so the bytes go to the cache first. */
+            fun open(context: Context, pdf: ByteArray): PdfPages {
+                val file = File.createTempFile("pages", ".pdf", context.cacheDir)
+                file.writeBytes(pdf)
+                val descriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+                val renderer = try {
+                    PdfRenderer(descriptor)
+                } catch (e: Exception) {
+                    descriptor.close()
+                    file.delete()
+                    throw SarvamException("That PDF could not be opened on the phone. It may be password-protected.", e)
+                }
+                return PdfPages(file, descriptor, renderer)
+            }
+        }
+    }
 }

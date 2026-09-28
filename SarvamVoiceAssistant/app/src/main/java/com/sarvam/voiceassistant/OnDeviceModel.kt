@@ -99,6 +99,45 @@ object OnDeviceModel {
         else -> "The download failed ($code). Tap Download to try again."
     }
 
+    /** The most pages read on the phone; each takes several seconds. */
+    const val MAX_OFFLINE_PAGES = 8
+
+    /** Gemma hears at most 30 seconds of audio at a time. */
+    const val MAX_AUDIO_MS = 30_000L
+
+    const val TRANSCRIBE_PROMPT =
+        "Transcribe this audio exactly as spoken, in the language and script the speaker used: " +
+            "Gujarati script for Gujarati, Devanagari for Hindi, English letters for English. " +
+            "Output only the spoken words, with no introduction. If there is no speech, output nothing."
+
+    const val READ_PAGE_PROMPT =
+        "Read this page. Write out all of its text exactly, in the original language and script, " +
+            "in reading order. If it has little or no text, describe what it shows instead. " +
+            "Output only that, with no introduction."
+
+    /**
+     * What the model heard, without the wrappers it sometimes adds — quotes, a
+     * "Transcription:" label, thinking. Null when it heard nothing.
+     */
+    fun cleanTranscript(raw: String): String? {
+        var text = ChatModels.stripThinking(raw).trim()
+        text = text.replace(Regex("^(transcription|transcript)\\s*:\\s*", RegexOption.IGNORE_CASE), "")
+        text = text.trim().removeSurrounding("\"").removeSurrounding("“", "”").trim()
+        return text.takeIf { it.isNotEmpty() }
+    }
+
+    /** Pages read on the phone, as one document; says so when some were left unread. */
+    fun joinPages(pages: List<String>, totalPages: Int): String {
+        val body = if (pages.size == 1) {
+            pages.single().trim()
+        } else {
+            pages.mapIndexed { i, page -> "--- Page ${i + 1} ---\n${page.trim()}" }.joinToString("\n\n")
+        }
+        if (totalPages <= pages.size) return body
+        return "$body\n\n(Only the first ${pages.size} of $totalPages pages were read on the phone. " +
+            "Read it again online for the rest.)"
+    }
+
     /** Strips any thinking the model emits, and whitespace; null when nothing is left. */
     fun cleanReply(raw: String): String? = ChatModels.stripThinking(raw).trim().takeIf { it.isNotEmpty() }
 }

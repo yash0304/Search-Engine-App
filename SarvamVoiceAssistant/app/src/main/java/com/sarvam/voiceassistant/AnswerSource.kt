@@ -18,8 +18,8 @@ enum class AnswerSource(val value: String, val label: String, val hint: String) 
     ON_DEVICE(
         "on_device",
         "On-device (Gemma 4)",
-        "Everything stays on the phone, including speech, which uses the phone's own voice. Works offline. " +
-            "Plain chat only — no web search, weather or reading new documents.",
+        "Everything stays on the phone: Gemma hears you, reads photos and PDFs, and answers; the phone's " +
+            "own voice speaks. Works offline. No web search or weather.",
     ),
     ;
 

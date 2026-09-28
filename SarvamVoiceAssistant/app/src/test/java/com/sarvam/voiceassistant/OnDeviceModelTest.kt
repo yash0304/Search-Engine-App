@@ -92,4 +92,23 @@ class OnDeviceModelTest {
         assertEquals("Oops", ModelStatus(problem = "Oops").describe())
         assertTrue(ModelStatus(ModelStatus.Phase.READY).ready)
     }
+
+    @Test
+    fun transcriptsLoseTheirWrappers() {
+        assertEquals("કેમ છો?", OnDeviceModel.cleanTranscript("Transcription: \"કેમ છો?\""))
+        assertEquals("aaj kya banau", OnDeviceModel.cleanTranscript("  “aaj kya banau”  "))
+        assertNull(OnDeviceModel.cleanTranscript("<think>silence</think>  "))
+    }
+
+    @Test
+    fun onePageIsJustItsText() {
+        assertEquals("Total: Rs 450", OnDeviceModel.joinPages(listOf(" Total: Rs 450 "), 1))
+    }
+
+    @Test
+    fun longDocumentsSayWhatWasLeftOut() {
+        val text = OnDeviceModel.joinPages(listOf("a", "b"), 23)
+        assertTrue(text.startsWith("--- Page 1 ---\na\n\n--- Page 2 ---\nb"))
+        assertTrue(text.contains("first 2 of 23 pages"))
+    }
 }
