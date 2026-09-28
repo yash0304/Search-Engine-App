@@ -22,6 +22,19 @@ android {
         buildConfigField("String", "GIT_COMMIT", "\"${gitCommit()}\"")
     }
 
+    signingConfigs {
+        // One fixed debug key, committed, so every build — CI's or a local one — can be
+        // installed over the last. Without it each CI runner made its own key, Android refused
+        // the update, and uninstalling first wiped the saved API key, chats and the 2.6 GB
+        // on-device model. It is Android's standard debug key setup: not for Play releases.
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
