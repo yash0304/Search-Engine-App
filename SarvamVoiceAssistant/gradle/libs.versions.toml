@@ -1,6 +1,8 @@
 [versions]
 agp = "8.7.3"
-kotlin = "2.0.21"
+# 2.3 at least: LiteRT-LM is built against the Kotlin 2.4 standard library, which
+# older compilers refuse to read.
+kotlin = "2.3.21"
 coreKtx = "1.15.0"
 lifecycle = "2.8.7"
 activityCompose = "1.9.3"
