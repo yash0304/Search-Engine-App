@@ -100,6 +100,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val deviceSpeech = DeviceSpeech(application)
     private val languages = LanguageDetect(application)
     private var modelPoll: Job? = null
+    private var modelImport: Job? = null
 
     private var client: SarvamClient? = null
     private var pipeline: Job? = null
@@ -332,7 +333,21 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Uses a model file the user already has, picked from the phone's storage. */
+    fun importModel(uri: Uri) {
+        if (modelImport?.isActive == true || _uiState.value.isBusy) return
+        onDevice.release()
+        _uiState.update { it.copy(model = ModelStatus(ModelStatus.Phase.IMPORTING)) }
+        modelImport = viewModelScope.launch {
+            val problem = modelFiles.importFrom(uri) { bytes ->
+                _uiState.update { it.copy(model = ModelStatus(ModelStatus.Phase.IMPORTING, bytes)) }
+            }
+            _uiState.update { it.copy(model = if (problem == null) modelFiles.status() else ModelStatus(problem = problem)) }
+        }
+    }
+
     fun cancelModelDownload() {
+        modelImport?.cancel()
         modelPoll?.cancel()
         modelFiles.cancel()
         refreshModelStatus()
@@ -352,6 +367,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Re-reads the download state, and follows it while a download is running. */
     fun refreshModelStatus() {
+        if (modelImport?.isActive == true) return // The copy reports its own progress.
         val status = modelFiles.status()
         _uiState.update { it.copy(model = status) }
         if (status.phase == ModelStatus.Phase.DOWNLOADING) pollModel()

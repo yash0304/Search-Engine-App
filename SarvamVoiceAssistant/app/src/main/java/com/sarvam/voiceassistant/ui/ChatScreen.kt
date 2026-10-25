@@ -131,6 +131,12 @@ fun ChatScreen(
         documentPicker.launch(arrayOf("application/pdf", "image/*"))
     }
 
+    // The on-device model file, when the user already has it. Any type: Android does not
+    // know .litertlm, so filtering by type would hide the very file wanted.
+    val modelPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri -> uri?.let(viewModel::importModel) }
+
     val micPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
@@ -192,6 +198,10 @@ fun ChatScreen(
                 lowMemory = state.lowMemory,
             ),
             onDownloadModel = viewModel::downloadModel,
+            onImportModel = {
+                onOpeningOwnScreen()
+                modelPicker.launch(arrayOf("*/*"))
+            },
             onCancelDownload = viewModel::cancelModelDownload,
             onDeleteModel = viewModel::deleteModel,
             onClearToken = viewModel::clearHuggingFaceToken,

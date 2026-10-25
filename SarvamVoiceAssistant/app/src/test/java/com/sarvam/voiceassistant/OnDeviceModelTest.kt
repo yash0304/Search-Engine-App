@@ -83,6 +83,16 @@ class OnDeviceModelTest {
     }
 
     @Test
+    fun onlyAFileOfTheModelsExactSizeCanBeImported() {
+        assertNull(OnDeviceModel.importProblem(2_588_147_712L))
+        assertNull("unknown size is checked after copying", OnDeviceModel.importProblem(null))
+        val problem = OnDeviceModel.importProblem(1_200_000_000L)!!
+        assertTrue(problem.contains("1.20 GB"))
+        assertTrue(problem.contains("gemma-4-E2B-it.litertlm"))
+        assertEquals("Copying the model file… 50%", ModelStatus(ModelStatus.Phase.IMPORTING, 1_294_073_856L).describe())
+    }
+
+    @Test
     fun statusLinesReadNaturally() {
         assertEquals("Starting download…", ModelStatus(ModelStatus.Phase.DOWNLOADING).describe())
         assertEquals(

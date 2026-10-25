@@ -5,10 +5,13 @@ import android.content.Context
 import android.net.Uri
 import android.os.StatFs
 import android.util.Log
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import java.io.File
+import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 /**
@@ -105,6 +108,71 @@ class ModelDownloader(context: Context) {
         null
     }
 
+    /**
+     * Copies a model file the user already has — from Downloads, a PC, an earlier install —
+     * instead of downloading it again. Copied under a temporary name and renamed once
+     * complete, so a cancelled copy never looks like an installed model.
+     *
+     * @return why it could not be imported, or null once it has.
+     */
+    suspend fun importFrom(source: Uri, onProgress: (Long) -> Unit): String? = withContext(Dispatchers.IO) {
+        val resolver = appContext.contentResolver
+        val dir = directory ?: return@withContext "Storage is unavailable right now."
+        dir.mkdirs()
+
+        val size = runCatching { resolver.openFileDescriptor(source, "r")?.use { it.statSize } }
+            .getOrNull()?.takeIf { it >= 0 }
+        OnDeviceModel.importProblem(size)?.let { return@withContext it }
+        val free = runCatching { StatFs(dir.path).availableBytes }.getOrDefault(Long.MAX_VALUE)
+        if (!OnDeviceModel.hasRoomFor(free)) {
+            return@withContext "Not enough free storage: copying the model needs ${OnDeviceModel.sizeLabel()} free."
+        }
+
+        cancel() // A download in progress would write to the same file.
+        val part = File(dir, OnDeviceModel.FILE_NAME + ".part")
+        val target = File(dir, OnDeviceModel.FILE_NAME)
+        try {
+            val input = resolver.openInputStream(source) ?: return@withContext "That file could not be opened."
+            input.use {
+                part.outputStream().use { out ->
+                    val buffer = ByteArray(1 shl 20)
+                    var copied = 0L
+                    var reported = 0L
+                    while (true) {
+                        coroutineContext.ensureActive()
+                        val read = it.read(buffer)
+                        if (read < 0) break
+                        out.write(buffer, 0, read)
+                        copied += read
+                        if (copied - reported >= PROGRESS_STEP) {
+                            reported = copied
+                            onProgress(copied)
+                        }
+                    }
+                }
+            }
+            if (!OnDeviceModel.isComplete(part.length())) {
+                val problem = OnDeviceModel.importProblem(part.length())
+                part.delete()
+                return@withContext problem ?: "The copy was incomplete. Try again."
+            }
+            target.delete()
+            if (!part.renameTo(target)) {
+                part.delete()
+                return@withContext "The model was copied but could not be saved. Try again."
+            }
+            finish(null)
+            null
+        } catch (e: CancellationException) {
+            part.delete()
+            throw e
+        } catch (e: IOException) {
+            part.delete()
+            Log.w(TAG, "Model import failed", e)
+            "Copying failed: ${e.message ?: "read error"}. Try again."
+        }
+    }
+
     /** Stops a download in progress and deletes what it had fetched. */
     fun cancel() {
         val id = prefs.getLong(KEY_ID, NONE)
@@ -143,5 +211,6 @@ class ModelDownloader(context: Context) {
         const val KEY_ID = "download_id"
         const val KEY_PROBLEM = "problem"
         const val NONE = -1L
+        const val PROGRESS_STEP = 32L * 1024 * 1024
     }
 }

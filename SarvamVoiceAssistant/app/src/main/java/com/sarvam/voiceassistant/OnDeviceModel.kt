@@ -87,6 +87,17 @@ object OnDeviceModel {
     fun history(messages: List<Message>): List<Message> =
         messages.takeLast(HISTORY_MESSAGES).dropWhile { it.role != Role.USER }
 
+    /**
+     * Why a picked file cannot be the model, or null if it may be. [size] is null when the
+     * file's size is unknown; the copy is then checked once made.
+     */
+    fun importProblem(size: Long?): String? {
+        if (size == null || size == SIZE_BYTES) return null
+        val gb = "%.2f".format(Locale.ENGLISH, size / 1_000_000_000.0)
+        return "That file is $gb GB, so it is not the model. Pick $FILE_NAME, which is exactly " +
+            "${"%,d".format(Locale.ENGLISH, SIZE_BYTES)} bytes (${sizeLabel()})."
+    }
+
     /** What a failed download means, from the HTTP status or DownloadManager reason code. */
     fun downloadFailure(code: Int): String = when (code) {
         401, 403 -> "Hugging Face refused the download. Sign in at huggingface.co, open " +
@@ -149,7 +160,7 @@ data class ModelStatus(
     /** Why the last download failed; shown as is. */
     val problem: String? = null,
 ) {
-    enum class Phase { ABSENT, DOWNLOADING, READY }
+    enum class Phase { ABSENT, DOWNLOADING, IMPORTING, READY }
 
     val ready: Boolean get() = phase == Phase.READY
 
@@ -162,6 +173,10 @@ data class ModelStatus(
             val percent = (downloadedBytes * 100 / OnDeviceModel.SIZE_BYTES).coerceIn(0, 100)
             val done = "%.1f".format(Locale.ENGLISH, downloadedBytes / 1_000_000_000.0)
             "Downloading… $percent% ($done of ${OnDeviceModel.sizeLabel()})"
+        }
+        Phase.IMPORTING -> {
+            val percent = (downloadedBytes * 100 / OnDeviceModel.SIZE_BYTES).coerceIn(0, 100)
+            "Copying the model file… $percent%"
         }
         Phase.ABSENT -> problem ?: "Not downloaded. ${OnDeviceModel.sizeLabel()}, once; Wi-Fi recommended."
     }

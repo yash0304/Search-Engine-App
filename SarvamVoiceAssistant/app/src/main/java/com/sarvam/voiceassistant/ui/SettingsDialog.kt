@@ -83,6 +83,7 @@ fun SettingsDialog(
     speechDiagnostics: String,
     offline: OfflineSettings,
     onDownloadModel: (token: String) -> Unit,
+    onImportModel: () -> Unit,
     onCancelDownload: () -> Unit,
     onDeleteModel: () -> Unit,
     onClearToken: () -> Unit,
@@ -179,6 +180,7 @@ fun SettingsDialog(
                     token = token,
                     onTokenChange = { token = it },
                     onDownload = { onDownloadModel(token.trim()) },
+                    onImport = onImportModel,
                     onCancel = onCancelDownload,
                     onDelete = onDeleteModel,
                     onClearToken = onClearToken,
@@ -329,6 +331,7 @@ private fun OnDeviceModelSection(
     token: String,
     onTokenChange: (String) -> Unit,
     onDownload: () -> Unit,
+    onImport: () -> Unit,
     onCancel: () -> Unit,
     onDelete: () -> Unit,
     onClearToken: () -> Unit,
@@ -379,9 +382,21 @@ private fun OnDeviceModelSection(
             OutlinedButton(onClick = onDownload, modifier = Modifier.fillMaxWidth()) {
                 Text("Download (${OnDeviceModel.sizeLabel()})")
             }
+            Spacer(Modifier.height(4.dp))
+            OutlinedButton(onClick = onImport, modifier = Modifier.fillMaxWidth()) {
+                Text("Import model file")
+            }
+            Text(
+                text = "Already have ${OnDeviceModel.FILE_NAME}? Pick it from Downloads or anywhere on the " +
+                    "phone and it is copied in, with no download.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
         ModelStatus.Phase.DOWNLOADING ->
             OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) { Text("Cancel download") }
+        ModelStatus.Phase.IMPORTING ->
+            OutlinedButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) { Text("Cancel copying") }
         ModelStatus.Phase.READY ->
             TextButton(onClick = onDelete) { Text("Delete model (frees ${OnDeviceModel.sizeLabel()})") }
     }

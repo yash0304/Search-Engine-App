@@ -142,6 +142,14 @@ class ScreenshotTest {
         ),
     )
 
+    /** No model yet: Download, or Import a file already on the phone. */
+    @Test
+    fun settingsImport() = settingsShot(
+        "12_settings_import",
+        hasKey = true,
+        OfflineSettings(AnswerSource.AUTOMATIC, ModelStatus(), hasToken = false, lowMemory = false),
+    )
+
     private fun settingsShot(name: String, hasKey: Boolean, offline: OfflineSettings) {
         compose.setContent {
             SarvamTheme(darkTheme = false) {
@@ -162,6 +170,7 @@ class ScreenshotTest {
                     speechDiagnostics = "Last turn — heard: streamed; answered: Sarvam; spoke: streamed",
                     offline = offline,
                     onDownloadModel = {},
+                    onImportModel = {},
                     onCancelDownload = {},
                     onDeleteModel = {},
                     onClearToken = {},

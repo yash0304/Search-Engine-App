@@ -265,6 +265,10 @@ The same model hears and reads, so offline:
   them as before.
 - **Replies** are spoken with the phone's own voices, as Gemma cannot speak.
 
+Already have the model file (from a PC, another phone or an earlier install)? Settings →
+**Import model file** copies `gemma-4-E2B-it.litertlm` in from anywhere on the phone, with no
+download. Only a file of the exact size is accepted.
+
 Typed text in English letters is ambiguous: it could be English or romanised Hindi. A 315 KB
 MediaPipe language detector, bundled in the app, tells them apart on the phone, so replies
 are spoken in the right voice.
