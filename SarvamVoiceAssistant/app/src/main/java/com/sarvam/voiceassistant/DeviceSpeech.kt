@@ -110,8 +110,12 @@ class DeviceSpeech(context: Context) {
         android.os.Handler(android.os.Looper.getMainLooper()).post { runCatching { recognizer?.stopListening() } }
     }
 
-    /** Speaks [text] and suspends until it has finished. */
+    /** Speaks [text] and suspends until it has finished; long replies go piece by piece. */
     suspend fun speak(text: String, languageCode: String) {
+        for (piece in SpeechText.chunks(text)) speakPiece(piece, languageCode)
+    }
+
+    private suspend fun speakPiece(text: String, languageCode: String) {
         val engine = engine() ?: throw SarvamException("This phone has no text-to-speech voice installed.")
 
         val wanted = Locale.forLanguageTag(languageCode)

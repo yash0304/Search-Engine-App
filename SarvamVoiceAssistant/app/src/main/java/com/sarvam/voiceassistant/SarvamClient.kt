@@ -658,7 +658,7 @@ class SarvamClient(private val apiKey: String) {
      */
     suspend fun speakStreaming(text: String, languageCode: String, speaker: String, sink: PcmSink) =
         streaming.speak(
-            text = text.take(TTS_CHAR_LIMIT),
+            text = text, // Split into pieces by StreamingSpeech, so nothing is cut.
             languageCode = Language.spokenOrDefault(languageCode),
             speaker = if (Voices.isValid(speaker)) speaker else Voices.DEFAULT,
             model = TTS_MODEL,

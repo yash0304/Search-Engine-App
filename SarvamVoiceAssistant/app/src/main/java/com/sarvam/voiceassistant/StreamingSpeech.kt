@@ -9,6 +9,7 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import java.io.ByteArrayOutputStream
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
@@ -65,6 +66,12 @@ class StreamingSpeech(
     /**
      * Speaks [text] through [sink], returning once it has been heard in full.
      *
+     * Long replies go up as several sentence-sized pieces ([SpeechText]). The server sends
+     * audio faster than it plays, so it is queued and played on its own thread: the socket is
+     * read at full speed, and its keep-alive pings are still answered while a long reply is
+     * being heard. Playing on the socket's thread blocked it for as long as the queued audio
+     * lasted, the pings went unanswered, and long replies stopped mid-sentence.
+     *
      * @throws StreamingException on any failure, with whether audio had already started.
      */
     suspend fun speak(
@@ -77,22 +84,29 @@ class StreamingSpeech(
         val settled = AtomicBoolean(false)
         val audioStarted = AtomicBoolean(false)
         val carry = SampleAligner()
+        val player = PlaybackQueue(sink)
 
         fun succeed(socket: WebSocket) {
             if (!settled.compareAndSet(false, true)) return
             socket.close(NORMAL_CLOSURE, null)
-            runCatching { sink.drainAndStop() }
-            continuation.resume(Unit)
+            // Everything has arrived; the reply finishes playing on the playback thread.
+            player.finish { continuation.resume(Unit) }
         }
 
         fun fail(message: String, cause: Throwable? = null) {
             if (!settled.compareAndSet(false, true)) return
-            sink.stop()
-            continuation.resumeWithException(StreamingException(message, audioStarted.get(), cause))
+            val error = StreamingException(message, audioStarted.get(), cause)
+            if (audioStarted.get()) {
+                // Let what already arrived be heard rather than cutting off mid-word.
+                player.finish { continuation.resumeWithException(error) }
+            } else {
+                player.stop()
+                continuation.resumeWithException(error)
+            }
         }
 
         try {
-            sink.start()
+            player.start()
         } catch (e: Exception) {
             continuation.resumeWithException(StreamingException("Could not open audio output.", false, e))
             return@suspendCancellableCoroutine
@@ -103,7 +117,7 @@ class StreamingSpeech(
             object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     webSocket.send(StreamingProtocol.ttsConfig(languageCode, speaker, model))
-                    webSocket.send(StreamingProtocol.ttsText(text))
+                    SpeechText.chunks(text).forEach { webSocket.send(StreamingProtocol.ttsText(it)) }
                     webSocket.send(StreamingProtocol.FLUSH)
                 }
 
@@ -114,7 +128,7 @@ class StreamingSpeech(
                             val aligned = carry.align(event.pcm)
                             if (aligned.isNotEmpty()) {
                                 audioStarted.set(true)
-                                runCatching { sink.write(aligned) }
+                                player.offer(aligned)
                             }
                         }
                         StreamingProtocol.TtsEvent.Final -> succeed(webSocket)
@@ -141,7 +155,7 @@ class StreamingSpeech(
         continuation.invokeOnCancellation {
             settled.set(true)
             socket.cancel()
-            sink.stop()
+            player.stop()
         }
     }
 
@@ -294,6 +308,54 @@ class StreamingSpeech(
  * Keeps 16-bit samples whole across chunk boundaries. A chunk with an odd byte count would
  * otherwise shift every later sample by one byte, which plays as loud static.
  */
+/**
+ * Plays queued audio on its own thread, so whoever receives it never waits for playback.
+ * Memory is not a concern: a minute of 24 kHz speech is under 3 MB.
+ */
+internal class PlaybackQueue(private val sink: PcmSink) {
+    private val queue = LinkedBlockingQueue<ByteArray>()
+    @Volatile private var stopped = false
+    @Volatile private var onDrained: (() -> Unit)? = null
+    private val worker = Thread(::play, "boliyan-playback").apply { isDaemon = true }
+
+    fun start() {
+        sink.start()
+        worker.start()
+    }
+
+    fun offer(pcm: ByteArray) {
+        if (!stopped) queue.put(pcm)
+    }
+
+    /** Plays everything queued, then calls [done] on the playback thread. */
+    fun finish(done: () -> Unit) {
+        onDrained = done
+        queue.put(END)
+    }
+
+    /** Stops now, discarding anything not yet heard. */
+    fun stop() {
+        stopped = true
+        queue.clear()
+        queue.put(END)
+        sink.stop()
+    }
+
+    private fun play() {
+        while (true) {
+            val chunk = queue.take()
+            if (chunk === END || stopped) break
+            runCatching { sink.write(chunk) }
+        }
+        if (!stopped) runCatching { sink.drainAndStop() }
+        onDrained?.invoke()
+    }
+
+    private companion object {
+        val END = ByteArray(0)
+    }
+}
+
 internal class SampleAligner {
     private var leftover: Byte? = null
 

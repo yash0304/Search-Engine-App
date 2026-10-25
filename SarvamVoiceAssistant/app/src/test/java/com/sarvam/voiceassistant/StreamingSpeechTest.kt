@@ -33,6 +33,7 @@ class StreamingSpeechTest {
     private lateinit var server: MockWebServer
     private val received = CopyOnWriteArrayList<String>()
     private val requestHeaders = CopyOnWriteArrayList<String>()
+    @Volatile private var clientClosedAt = 0L
 
     @Before
     fun setUp() {
@@ -68,6 +69,7 @@ class StreamingSpeechTest {
                     // Answer the client's close frame, as a real server does; otherwise
                     // MockWebServer waits on the half-closed socket at shutdown.
                     override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                        clientClosedAt = System.nanoTime()
                         webSocket.close(1000, null)
                     }
                 },
@@ -103,6 +105,55 @@ class StreamingSpeechTest {
     }
 
     @Test
+    fun aLongReplyIsSentInPiecesNotCutOff() = runBlocking {
+        serve { socket, message ->
+            if (type(message) == "flush") socket.send("""{"type":"event","data":{"event_type":"final"}}""")
+        }
+        val reply = "This sentence is about forty characters. ".repeat(60).trim()
+
+        try {
+            speech().speak(reply, "en-IN", "priya", "bulbul:v3", RecordingSink())
+        } catch (e: StreamingException) {
+            // No audio in this test; only what was sent matters.
+        }
+
+        val texts = received.filter { type(it) == "text" }.map { JSONObject(it).getJSONObject("data").getString("text") }
+        assertTrue("2,460 characters need several pieces", texts.size > 1)
+        assertEquals(reply, texts.joinToString(" "))
+        assertEquals("flush", type(received.last()))
+    }
+
+    /**
+     * The bug behind replies stopping after ~20 seconds: playing on the socket's thread kept
+     * it from reading (and answering keep-alive pings) until the audio caught up.
+     */
+    @Test
+    fun aSlowSpeakerDoesNotHoldUpTheSocket() = runBlocking {
+        serve { socket, message ->
+            if (type(message) == "flush") {
+                repeat(5) { socket.send(audio(byteArrayOf(it.toByte(), 0))) }
+                socket.send("""{"type":"event","data":{"event_type":"final"}}""")
+            }
+        }
+        var finishedPlayingAt = 0L
+        val sink = object : PcmSink {
+            val bytes = ByteArrayOutputStream()
+            override fun start() = Unit
+            override fun write(pcm: ByteArray) {
+                Thread.sleep(200) // Real playback takes as long as the audio lasts.
+                synchronized(bytes) { bytes.write(pcm) }
+            }
+            override fun drainAndStop() { finishedPlayingAt = System.nanoTime() }
+            override fun stop() = Unit
+        }
+
+        speech().speak("Hello", "en-IN", "priya", "bulbul:v3", sink)
+
+        assertEquals("every chunk is still heard", 10, synchronized(sink.bytes) { sink.bytes.size() })
+        assertTrue("the socket finished long before playback did", clientClosedAt in 1 until finishedPlayingAt - 500_000_000L)
+    }
+
+    @Test
     fun serverErrorBeforeAnyAudioAllowsFallback() = runBlocking {
         serve { socket, message ->
             if (type(message) == "config") socket.send("""{"type":"error","data":{"message":"Invalid speaker"}}""")
@@ -128,12 +179,14 @@ class StreamingSpeechTest {
             }
         }
 
+        val sink = RecordingSink()
         try {
-            speech().speak("Hi", "en-IN", "priya", "bulbul:v3", RecordingSink())
+            speech().speak("Hi", "en-IN", "priya", "bulbul:v3", sink)
             fail("expected StreamingException")
         } catch (e: StreamingException) {
             assertTrue("half a reply was heard; replaying it from the start would be worse", e.audioStarted)
         }
+        assertArrayEquals("what arrived is still heard, not cut off", byteArrayOf(1, 0), sink.played())
     }
 
     @Test

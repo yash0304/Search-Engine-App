@@ -9,6 +9,7 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -690,18 +691,37 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             noteSpeech(spoke = "standard")
         }
 
-        val audioBytes = try {
-            api.synthesize(reply, spokenLanguage, speaker)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            if (!Routing.isNetworkFailure(e)) throw e
-            speakOnPhone(reply, spokenLanguage)
+        // One request per sentence-sized piece, so a long reply is spoken in full; the next
+        // piece is fetched while the current one plays, so there is no gap between them.
+        val pieces = SpeechText.chunks(reply)
+        if (pieces.isEmpty()) {
+            setStage(Stage.IDLE)
             return
         }
         val file = File(getApplication<Application>().cacheDir, "reply.wav")
-        file.writeBytes(audioBytes)
-        player.play(file) // Suspends until the reply has actually finished playing.
+        var next = viewModelScope.async(Dispatchers.IO) { runCatching { api.synthesize(pieces[0], spokenLanguage, speaker) } }
+        for (index in pieces.indices) {
+            val audio = next.await().getOrElse { e ->
+                if (e is CancellationException) throw e
+                if (index == 0 && Routing.isNetworkFailure(e)) {
+                    speakOnPhone(reply, spokenLanguage)
+                    return
+                }
+                // Part of the reply was heard; the rest is on screen.
+                if (index > 0) {
+                    noteSpeech(spoke = "standard, stopped at part ${index + 1} of ${pieces.size} (${e.message})")
+                    setStage(Stage.IDLE)
+                    return
+                }
+                throw e
+            }
+            if (index + 1 < pieces.size) {
+                val piece = pieces[index + 1]
+                next = viewModelScope.async(Dispatchers.IO) { runCatching { api.synthesize(piece, spokenLanguage, speaker) } }
+            }
+            file.writeBytes(audio)
+            player.play(file) // Suspends until this piece has actually finished playing.
+        }
 
         setStage(Stage.IDLE)
     }
