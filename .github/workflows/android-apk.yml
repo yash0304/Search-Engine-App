@@ -84,6 +84,18 @@ jobs:
           unzip -p "$apk" assets/dictionary.db.bin | gzip -t -
           echo "assets/dictionary.db.bin is packaged under its own name and is a valid gzip."
 
+      # Updates install over the previous build only if every APK carries the same
+      # certificate. Fail here, not on the phone, if the committed debug key was not used.
+      - name: Verify the APK is signed with the committed key
+        run: |
+          set -euo pipefail
+          apk=app/build/outputs/apk/debug/app-debug.apk
+          apksigner=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
+          "$apksigner" verify --print-certs "$apk" | tee certs.txt
+          expected=107026e54f138bb5f43fe3c5f4c80ea55e5c2a173e737fc25e26791a3464f65e
+          grep -qi "SHA-256 digest: $expected" certs.txt
+          echo "Signed with the committed debug key ($expected)."
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
